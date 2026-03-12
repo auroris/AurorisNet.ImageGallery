@@ -117,17 +117,27 @@
             // Tear down any previous Fancybox binding before re-binding for the new directory
             Fancybox.unbind("[data-fancybox='gallery']");
             Fancybox.bind("[data-fancybox='gallery']", {
-                caption: function () {
-                    // Placeholder div filled asynchronously by beforeShow for all media types
-                    return "<div id='caption'></div>";
-                },
-                beforeShow: function (instance, slide) {
-                    $.getJSON(slide.src.replace("/media/file/", "/media/meta/"), function (data) {
-                        const caption = data.Caption ? escapeHtml(data.Caption) + "<br />" : "";
-                        $("#caption").html(caption + "<a href=\"" + slide.src + "\">Download</a>");
-                    }).fail(function (jqXHR, textStatus, errorThrown) {
-                        console.log(textStatus, errorThrown);
-                    });
+                Carousel: {
+                    formatCaption: function (carouselRef, slide) {
+                        // Title from the gallery overlay div adjacent to the trigger <a>
+                        const titleText = slide.triggerEl?.nextElementSibling?.textContent || "";
+                        const title = titleText ? "<strong>" + escapeHtml(titleText) + "</strong><br />" : "";
+                        const captionId = "fancybox-caption-" + slide.index;
+
+                        // Async-load IPTC caption from per-file metadata ADS
+                        $.getJSON(slide.src.replace("/media/file/", "/media/meta/"), function (data) {
+                            const el = document.getElementById(captionId);
+                            if (el && data.Caption) {
+                                el.innerHTML = escapeHtml(data.Caption) + "<br />";
+                            }
+                        }).fail(function (jqXHR, textStatus, errorThrown) {
+                            console.log(textStatus, errorThrown);
+                        });
+
+                        return title +
+                            "<span id='" + captionId + "'></span>" +
+                            "<a href='" + slide.src + "'>Download</a>";
+                    }
                 },
                 hash: false
             });
