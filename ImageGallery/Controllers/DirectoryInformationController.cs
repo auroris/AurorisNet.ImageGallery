@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using ImageGallery.Workers;
 using Microsoft.AspNetCore.Mvc;
@@ -23,17 +24,36 @@ namespace ImageGallery.Controllers
     [ApiController]
     public class DirectoryInformationController : ControllerBase
     {
-        // GET: /api/dir
+        /// <summary>Returns the media index for the gallery root directory.</summary>
+        /// <response code="200">Dictionary of relative path → <see cref="DirectoryWorker.DirItem"/> for all media files and subdirectories.</response>
+        /// <response code="404">Gallery root not found.</response>
+        /// <response code="409">Thumbnail generation is already in progress for this directory; retry shortly.</response>
         [HttpGet]
+        [Produces("application/json")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
+        [ProducesResponseType(typeof(SortedDictionary<string, DirectoryWorker.DirItem>), 200)]
+        [ProducesResponseType(404)]
+        [ProducesResponseType(409)]
         public Task<IActionResult> Get()
         {
             return Get("");
         }
 
-        // GET: /api/dir/*
+        /// <summary>
+        /// Returns the media index for a gallery subdirectory. Scans the directory, generates any
+        /// missing thumbnails and icons, then returns the complete index. This request blocks until
+        /// generation is complete; poll <c>/api/dir/status/{path}</c> for progress.
+        /// </summary>
+        /// <param name="requestPath">Gallery-relative path to the directory (e.g. <c>2024/Spring</c>).</param>
+        /// <response code="200">Dictionary of filename → <see cref="DirectoryWorker.DirItem"/> for all media files and subdirectories.</response>
+        /// <response code="404">Directory not found or outside the gallery root.</response>
+        /// <response code="409">Thumbnail generation is already in progress for this directory; retry shortly.</response>
         [HttpGet("{*requestPath}")]
+        [Produces("application/json")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
+        [ProducesResponseType(typeof(SortedDictionary<string, DirectoryWorker.DirItem>), 200)]
+        [ProducesResponseType(404)]
+        [ProducesResponseType(409)]
         public async Task<IActionResult> Get(String requestPath)
         {
             String reqPath = requestPath.Replace('/', Path.DirectorySeparatorChar);
@@ -58,15 +78,30 @@ namespace ImageGallery.Controllers
             return NotFound();
         }
 
-        // GET: /api/dir/status
+        /// <summary>Returns the thumbnail-generation progress percentage for the gallery root directory.</summary>
+        /// <response code="200">Integer 0–100 representing the completion percentage.</response>
+        /// <response code="404">Gallery root directory not found.</response>
         [HttpGet("status")]
+        [Produces("application/json")]
+        [ProducesResponseType(typeof(int), 200)]
+        [ProducesResponseType(404)]
         public IActionResult Status()
         {
             return Status("");
         }
 
-        // GET: /api/dir/status/*
+        /// <summary>
+        /// Returns the thumbnail-generation progress percentage for a gallery subdirectory.
+        /// Reads the completion byte from the <see cref="ProgressWorker"/> memory-mapped file.
+        /// Returns 0 when no generation is currently running.
+        /// </summary>
+        /// <param name="requestPath">Gallery-relative path to the directory (e.g. <c>2024/Spring</c>).</param>
+        /// <response code="200">Integer 0–100 representing the completion percentage.</response>
+        /// <response code="404">Directory not found or outside the gallery root.</response>
         [HttpGet("status/{*requestPath}")]
+        [Produces("application/json")]
+        [ProducesResponseType(typeof(int), 200)]
+        [ProducesResponseType(404)]
         public IActionResult Status(String requestPath)
         {
             String reqPath = requestPath.Replace('/', Path.DirectorySeparatorChar);

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using ImageMagick;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +34,8 @@ namespace ImageGallery
 
 			builder.Services.AddResponseCaching();
 			builder.Services.AddControllers();
+			builder.Services.AddEndpointsApiExplorer();
+			builder.Services.AddSwaggerGen();
 
 			var app = builder.Build();
 
@@ -43,6 +46,8 @@ namespace ImageGallery
 			if (app.Environment.IsDevelopment())
 			{
 				app.UseDeveloperExceptionPage();
+				app.UseSwagger();
+				app.UseSwaggerUI();
 			}
 			else
 			{
