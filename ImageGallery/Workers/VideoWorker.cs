@@ -1,3 +1,4 @@
+using log4net;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -27,6 +28,8 @@ namespace ImageGallery.Workers
 	/// </summary>
 	public class VideoWorker
 	{
+		private static readonly ILog Log = LogManager.GetLogger(typeof(VideoWorker));
+
 		public VideoWorker()
 		{}
 
@@ -43,10 +46,25 @@ namespace ImageGallery.Workers
 		public async Task<MediaResult> ProcessAsync(FileInfo file, ProgressWorker progress, Media.Type type)
 		{
 			MediaResult result = new MediaResult();
-			IMediaInfo mediaInfo = await FFmpeg.GetMediaInfo(file.FullName);
+			IMediaInfo mediaInfo;
+			try
+			{
+				mediaInfo = await FFmpeg.GetMediaInfo(file.FullName);
+			}
+			catch (Exception ex)
+			{
+				Log.Error($"FFmpeg failed to read media info for: {file.FullName}", ex);
+				throw;
+			}
+
 			IVideoStream videoStream = mediaInfo.VideoStreams.FirstOrDefault();
-			if (videoStream == null) { throw new InvalidOperationException("No video stream found in " + file.FullName); }
-			
+			if (videoStream == null)
+			{
+				var ex = new InvalidOperationException("No video stream found in " + file.FullName);
+				Log.Error(ex.Message);
+				throw ex;
+			}
+
 			// Temp file is GUID-prefixed to avoid collisions when multiple workers run in parallel
 			string thumbTempFile = Path.Combine(Configuration.Get.TempDir, Guid.NewGuid() + "_" + Media.GetThumbName(file));
 
@@ -98,6 +116,25 @@ namespace ImageGallery.Workers
 						await input.CopyToAsync(output);
 					}
 				}
+				catch (IOException ex) when (IsDiskFull(ex))
+				{
+					Log.Error($"Disk full while generating thumbnail for video: {file.FullName} " +
+						$"(temp dir: {Configuration.Get.TempDir}, target volume: {Path.GetPathRoot(file.FullName)})", ex);
+					throw;
+				}
+				catch (IOException ex)
+				{
+					Log.Error($"I/O error generating thumbnail for video: {file.FullName} " +
+						$"(temp file: {thumbTempFile}) — " +
+						"check temp dir write permissions and that the target volume supports NTFS alternate data streams", ex);
+					throw;
+				}
+				catch (Exception ex)
+				{
+					Log.Error($"Failed to generate thumbnail for video: {file.FullName} " +
+						$"(temp dir: {Configuration.Get.TempDir})", ex);
+					throw;
+				}
 				finally
 				{
 					if (File.Exists(thumbTempFile)) File.Delete(thumbTempFile);
@@ -144,10 +181,40 @@ namespace ImageGallery.Workers
 					await input.CopyToAsync(output);
 				}
 			}
+			catch (IOException ex) when (IsDiskFull(ex))
+			{
+				Log.Error($"Disk full while generating icon for video: {file.FullName} " +
+					$"(temp dir: {Configuration.Get.TempDir}, target volume: {Path.GetPathRoot(file.FullName)})", ex);
+				throw;
+			}
+			catch (IOException ex)
+			{
+				Log.Error($"I/O error generating icon for video: {file.FullName} " +
+					$"(temp file: {iconTempFile}) — " +
+					"check temp dir write permissions and that the target volume supports NTFS alternate data streams", ex);
+				throw;
+			}
+			catch (Exception ex)
+			{
+				Log.Error($"Failed to generate icon for video: {file.FullName} " +
+					$"(temp dir: {Configuration.Get.TempDir})", ex);
+				throw;
+			}
 			finally
 			{
 				if (File.Exists(iconTempFile)) File.Delete(iconTempFile);
 			}
+		}
+
+		/// <summary>
+		/// Returns true if the IOException represents a disk-full condition
+		/// (ERROR_DISK_FULL 0x70 or ERROR_HANDLE_DISK_FULL 0x27).
+		/// </summary>
+		private static bool IsDiskFull(IOException ex)
+		{
+			const int ERROR_DISK_FULL = unchecked((int)0x80070070);
+			const int ERROR_HANDLE_DISK_FULL = unchecked((int)0x80070027);
+			return ex.HResult == ERROR_DISK_FULL || ex.HResult == ERROR_HANDLE_DISK_FULL;
 		}
 	}
 }

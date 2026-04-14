@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using ImageGallery.Workers;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 
 namespace ImageGallery.Controllers
@@ -24,6 +25,13 @@ namespace ImageGallery.Controllers
     [ApiController]
     public class DirectoryInformationController : ControllerBase
     {
+        private readonly ILogger<DirectoryInformationController> _logger;
+
+        public DirectoryInformationController(ILogger<DirectoryInformationController> logger)
+        {
+            _logger = logger;
+        }
+
         /// <summary>Returns the media index for the gallery root directory.</summary>
         /// <response code="200">Dictionary of relative path → <see cref="DirectoryWorker.DirItem"/> for all media files and subdirectories.</response>
         /// <response code="404">Gallery root not found.</response>
@@ -65,14 +73,22 @@ namespace ImageGallery.Controllers
                 || realPath.StartsWith(galleryRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 && Directory.Exists(realPath))
             {
-                DirectoryWorker worker = new DirectoryWorker(new DirectoryInfo(realPath));
-                var result = await worker.ProcessAsync(Configuration.Get.RegenerateThumbnails);
-                if (result == null)
+                try
                 {
-                    // Generation already in progress for this directory
-                    return Conflict();
+                    DirectoryWorker worker = new DirectoryWorker(new DirectoryInfo(realPath));
+                    var result = await worker.ProcessAsync(Configuration.Get.RegenerateThumbnails);
+                    if (result == null)
+                    {
+                        // Generation already in progress for this directory
+                        return Conflict();
+                    }
+                    return Ok(result);
                 }
-                return Ok(result);
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing directory: {Path}", realPath);
+                    return StatusCode(500, new { error = "Failed to process directory.", detail = ex.Message });
+                }
             }
 
             return NotFound();
@@ -113,8 +129,16 @@ namespace ImageGallery.Controllers
                 || realPath.StartsWith(galleryRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 && Directory.Exists(realPath))
             {
-                using ProgressWorker progress = new ProgressWorker(new DirectoryInfo(realPath));
-                return Ok(progress.GetProgress());
+                try
+                {
+                    using ProgressWorker progress = new ProgressWorker(new DirectoryInfo(realPath));
+                    return Ok(progress.GetProgress());
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error reading progress for directory: {Path}", realPath);
+                    return StatusCode(500, new { error = "Failed to read progress.", detail = ex.Message });
+                }
             }
 
             return NotFound();

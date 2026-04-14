@@ -5,6 +5,8 @@ using ImageMagick;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Xabe.FFmpeg;
@@ -51,6 +53,24 @@ namespace ImageGallery
 			}
 			else
 			{
+				app.UseExceptionHandler(errorApp =>
+				{
+					errorApp.Run(async context =>
+					{
+						var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+							.CreateLogger("UnhandledException");
+						var exceptionFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+						if (exceptionFeature?.Error != null)
+						{
+							logger.LogError(exceptionFeature.Error, "Unhandled exception on {Method} {Path}",
+								context.Request.Method, context.Request.Path);
+						}
+						context.Response.StatusCode = 500;
+						context.Response.ContentType = "application/json";
+						await context.Response.WriteAsync(
+							System.Text.Json.JsonSerializer.Serialize(new { error = "An internal server error occurred." }));
+					});
+				});
 				app.UseStatusCodePages("text/plain", "{0}");
 			}
 
@@ -61,6 +81,19 @@ namespace ImageGallery
 
 			// Prepare the temp directory used by ImageMagick and FFmpeg during thumbnail generation
 			Directory.CreateDirectory(Configuration.Get.TempDir);
+			string tempProbeFile = Path.Combine(Configuration.Get.TempDir, ".write_test_" + Guid.NewGuid());
+			try
+			{
+				File.WriteAllText(tempProbeFile, "");
+				File.Delete(tempProbeFile);
+			}
+			catch (Exception ex)
+			{
+				var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+				startupLogger.LogCritical(ex, "Temp directory is not writable: {TempDir}", Configuration.Get.TempDir);
+				throw new InvalidOperationException(
+					$"Temp directory is not writable: {Configuration.Get.TempDir} — check that the path exists and the application has write permissions.", ex);
+			}
 			MagickNET.SetTempDirectory(Configuration.Get.TempDir);
 			FFmpeg.SetExecutablesPath(Path.Combine(builder.Environment.ContentRootPath, "ffmpeg"));
 

@@ -1,3 +1,4 @@
+using log4net;
 using MetadataExtractor;
 using System;
 using System.Collections.Generic;
@@ -11,6 +12,8 @@ namespace ImageGallery
     /// </summary>
     public class Media
     {
+        private static readonly ILog Log = LogManager.GetLogger(typeof(Media));
+
         /// <summary>Distinguishes between the two derivative types produced for each media file.</summary>
         public enum Type
         {
@@ -76,9 +79,16 @@ namespace ImageGallery
         {
             Dictionary<string, string> metaDic = new Dictionary<string, string>();
 
-            foreach (var directory in ImageMetadataReader.ReadMetadata(file.FullName))
-                foreach (var tag in directory.Tags)
-                    metaDic.TryAdd(tag.Name, tag.Description);
+            try
+            {
+                foreach (var directory in ImageMetadataReader.ReadMetadata(file.FullName))
+                    foreach (var tag in directory.Tags)
+                        metaDic.TryAdd(tag.Name, tag.Description);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Failed to read metadata from: {file.FullName}", ex);
+            }
 
             return metaDic;
         }

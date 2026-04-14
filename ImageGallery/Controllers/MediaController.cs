@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using ImageGallery.Workers;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Trinet.Core.IO.Ntfs;
 
 namespace ImageGallery.Controllers
@@ -15,8 +16,11 @@ namespace ImageGallery.Controllers
     [ApiController]
     public class MediaController : ControllerBase
     {
-        public MediaController()
+        private readonly ILogger<MediaController> _logger;
+
+        public MediaController(ILogger<MediaController> logger)
         {
+            _logger = logger;
         }
 
         /// <summary>Returns the animated MP4 thumbnail clip for a media file, read from its NTFS ADS.</summary>
@@ -86,14 +90,22 @@ namespace ImageGallery.Controllers
         {
             if (file == null) { return NotFound(); }
 
-            if (dataStream != null && file.Exists && file.AlternateDataStreamExists(dataStream))
+            try
             {
-                return File(file.GetAlternateDataStream(dataStream, FileMode.Open).OpenRead(), Mime.GetType(dataStream));
-            }
+                if (dataStream != null && file.Exists && file.AlternateDataStreamExists(dataStream))
+                {
+                    return File(file.GetAlternateDataStream(dataStream, FileMode.Open).OpenRead(), Mime.GetType(dataStream));
+                }
 
-            if (dataStream == null && file.Exists)
+                if (dataStream == null && file.Exists)
+                {
+                    return PhysicalFile(file.FullName, Mime.GetType(file.Name));
+                }
+            }
+            catch (Exception ex)
             {
-                return PhysicalFile(file.FullName, Mime.GetType(file.Name));
+                _logger.LogError(ex, "Error reading file: {File}, stream: {Stream}", file.FullName, dataStream);
+                return StatusCode(500, new { error = "Failed to read file.", detail = ex.Message });
             }
 
             return NotFound();

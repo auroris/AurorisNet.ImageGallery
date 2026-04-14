@@ -1,4 +1,6 @@
 using ImageMagick;
+using log4net;
+using System;
 using System.IO;
 using Trinet.Core.IO.Ntfs;
 using System.Threading.Tasks;
@@ -22,6 +24,8 @@ namespace ImageGallery.Workers
 	/// </summary>
 	public class ImageWorker
 	{
+		private static readonly ILog Log = LogManager.GetLogger(typeof(ImageWorker));
+
 		public ImageWorker() { }
 
 		/// <summary>
@@ -50,28 +54,48 @@ namespace ImageGallery.Workers
 			{
 				await Task.Run(() =>
 				{
-					using MagickImage image = new MagickImage(file.FullName);
-					result.Width = (int)image.Width;
-					result.Height = (int)image.Height;
-
-					// Compute new dimensions
-					Media.Dimension imageCrop = Media.GetCroppedThumbnailDimensions((int)image.Width, (int)image.Height, true);
-
-					// Crop image
-					image.Crop(new MagickGeometry(imageCrop.CropLeft, imageCrop.CropTop, (uint)imageCrop.CropWidth, (uint)imageCrop.CropHeight));
-
-					// Resize image to thumbnail
-					MagickGeometry thumbSize = new MagickGeometry((uint)imageCrop.Width, (uint)imageCrop.Height);
-					thumbSize.IgnoreAspectRatio = false;
-					image.Resize(thumbSize);
-
-					// Write the thumbnail to disk
-					using (FileStream writeStream = file.GetAlternateDataStream(Media.GetThumbName(file), FileMode.Create).OpenWrite())
+					try
 					{
-						image.Write(writeStream);
-					}
+						using MagickImage image = new MagickImage(file.FullName);
+						result.Width = (int)image.Width;
+						result.Height = (int)image.Height;
 
-					progress.FinishedWork(Media.GetThumbName(file));
+						// Compute new dimensions
+						Media.Dimension imageCrop = Media.GetCroppedThumbnailDimensions((int)image.Width, (int)image.Height, true);
+
+						// Crop image
+						image.Crop(new MagickGeometry(imageCrop.CropLeft, imageCrop.CropTop, (uint)imageCrop.CropWidth, (uint)imageCrop.CropHeight));
+
+						// Resize image to thumbnail
+						MagickGeometry thumbSize = new MagickGeometry((uint)imageCrop.Width, (uint)imageCrop.Height);
+						thumbSize.IgnoreAspectRatio = false;
+						image.Resize(thumbSize);
+
+						// Write the thumbnail to disk
+						using (FileStream writeStream = file.GetAlternateDataStream(Media.GetThumbName(file), FileMode.Create).OpenWrite())
+						{
+							image.Write(writeStream);
+						}
+
+						progress.FinishedWork(Media.GetThumbName(file));
+					}
+					catch (IOException ex) when (IsDiskFull(ex))
+					{
+						Log.Error($"Disk full while writing thumbnail for image: {file.FullName} " +
+							$"(target volume: {Path.GetPathRoot(file.FullName)})", ex);
+						throw;
+					}
+					catch (IOException ex)
+					{
+						Log.Error($"I/O error writing thumbnail ADS for image: {file.FullName} — " +
+							"verify the volume supports NTFS alternate data streams and the app has write permission", ex);
+						throw;
+					}
+					catch (Exception ex)
+					{
+						Log.Error($"Failed to generate thumbnail for image: {file.FullName}", ex);
+						throw;
+					}
 				});
 			}
 
@@ -79,26 +103,57 @@ namespace ImageGallery.Workers
 			{
 				await Task.Run(() =>
 				{
-					using MagickImage image = new MagickImage(file.FullName);
-					result.Width = (int)image.Width;
-					result.Height = (int)image.Height;
-
-					// Resize image to icon
-					MagickGeometry iconSize = new MagickGeometry((uint)Configuration.Get.Image.Icon.Width, (uint)Configuration.Get.Image.Icon.Height);
-					iconSize.IgnoreAspectRatio = false;
-					image.Resize(iconSize);
-
-					// Write the icon to disk
-					using (FileStream writeStream = file.GetAlternateDataStream(Media.GetIconName(file), FileMode.Create).OpenWrite())
+					try
 					{
-						image.Write(writeStream);
-					}
+						using MagickImage image = new MagickImage(file.FullName);
+						result.Width = (int)image.Width;
+						result.Height = (int)image.Height;
 
-					progress.FinishedWork(Media.GetIconName(file));
+						// Resize image to icon
+						MagickGeometry iconSize = new MagickGeometry((uint)Configuration.Get.Image.Icon.Width, (uint)Configuration.Get.Image.Icon.Height);
+						iconSize.IgnoreAspectRatio = false;
+						image.Resize(iconSize);
+
+						// Write the icon to disk
+						using (FileStream writeStream = file.GetAlternateDataStream(Media.GetIconName(file), FileMode.Create).OpenWrite())
+						{
+							image.Write(writeStream);
+						}
+
+						progress.FinishedWork(Media.GetIconName(file));
+					}
+					catch (IOException ex) when (IsDiskFull(ex))
+					{
+						Log.Error($"Disk full while writing icon for image: {file.FullName} " +
+							$"(target volume: {Path.GetPathRoot(file.FullName)})", ex);
+						throw;
+					}
+					catch (IOException ex)
+					{
+						Log.Error($"I/O error writing icon ADS for image: {file.FullName} — " +
+							"verify the volume supports NTFS alternate data streams and the app has write permission", ex);
+						throw;
+					}
+					catch (Exception ex)
+					{
+						Log.Error($"Failed to generate icon for image: {file.FullName}", ex);
+						throw;
+					}
 				});
 			}
 
 			return result;
+		}
+
+		/// <summary>
+		/// Returns true if the IOException represents a disk-full condition
+		/// (ERROR_DISK_FULL 0x70 or ERROR_HANDLE_DISK_FULL 0x27).
+		/// </summary>
+		private static bool IsDiskFull(IOException ex)
+		{
+			const int ERROR_DISK_FULL = unchecked((int)0x80070070);
+			const int ERROR_HANDLE_DISK_FULL = unchecked((int)0x80070027);
+			return ex.HResult == ERROR_DISK_FULL || ex.HResult == ERROR_HANDLE_DISK_FULL;
 		}
     }
 }
