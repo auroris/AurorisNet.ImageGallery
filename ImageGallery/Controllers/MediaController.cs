@@ -25,11 +25,11 @@ namespace ImageGallery.Controllers
 
         /// <summary>Returns the animated MP4 thumbnail clip for a media file, read from its NTFS ADS.</summary>
         /// <param name="requestPath">Gallery-relative path to the file (e.g. <c>2024/photo.jpg</c>).</param>
-        /// <response code="200">The thumbnail video/image stream.</response>
+        /// <response code="200">The thumbnail video stream.</response>
         /// <response code="404">File not found, outside the gallery root, or thumbnail not yet generated.</response>
         [HttpGet("thumb/{*requestPath}")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
-        [ProducesResponseType(200)]
+        [ProducesResponseType(typeof(FileStreamResult), 200)]
         [ProducesResponseType(404)]
         public IActionResult GetThumbnail(String requestPath)
         {
@@ -43,7 +43,7 @@ namespace ImageGallery.Controllers
         /// <response code="404">File not found, outside the gallery root, or icon not yet generated.</response>
         [HttpGet("icon/{*requestPath}")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
-        [ProducesResponseType(200)]
+        [ProducesResponseType(typeof(FileStreamResult), 200)]
         [ProducesResponseType(404)]
         public IActionResult GetIcon(String requestPath)
         {
@@ -74,18 +74,15 @@ namespace ImageGallery.Controllers
         /// <response code="404">File not found or outside the gallery root.</response>
         [HttpGet("file/{*requestPath}")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
-        [ProducesResponseType(200)]
+        [ProducesResponseType(typeof(PhysicalFileResult), 200)]
         [ProducesResponseType(404)]
         public IActionResult GetFile(String requestPath)
         {
             return GetFile(GetFileInfo(requestPath));
         }
 
-        /// <summary>
-        /// Dispatcher that serves either an NTFS alternate data stream or the file itself.
-        /// When <paramref name="dataStream"/> is provided the named ADS is opened; otherwise
-        /// the file is served directly via <c>PhysicalFile</c>.
-        /// </summary>
+        // Serves either an NTFS alternate data stream (when dataStream is provided) or the file
+        // itself. Returns 404 when the file or stream does not exist.
         private IActionResult GetFile(FileInfo file, string dataStream = null)
         {
             if (file == null) { return NotFound(); }
@@ -111,11 +108,8 @@ namespace ImageGallery.Controllers
             return NotFound();
         }
 
-        /// <summary>
-        /// Resolves a URL-style request path to a <see cref="FileInfo"/> within the configured
-        /// gallery root. Returns <c>null</c> if the path resolves outside the gallery root or
-        /// the file does not exist, preventing directory traversal attacks.
-        /// </summary>
+        // Resolves a URL-style request path to a FileInfo within the configured gallery root.
+        // Returns null if the path escapes the gallery root, preventing directory traversal.
         private FileInfo GetFileInfo(string requestPath)
         {
             String reqPath = requestPath.Replace('/', Path.DirectorySeparatorChar);

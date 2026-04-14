@@ -16,9 +16,9 @@ namespace ImageGallery.Controllers
     /// Responses are cached for 7 days.
     /// </para>
     /// <para>
-    /// <b>GET /api/dir/status/{path}</b> — returns the current completion percentage (0–100) from
-    /// the <see cref="ProgressWorker"/> memory-mapped file. Not cached; intended to be polled by
-    /// the frontend while thumbnail generation is in progress.
+    /// <b>GET /api/dir/status/{path}</b> — returns the current completion percentage and last
+    /// completed filename from the <see cref="ProgressWorker"/> memory-mapped file. Not cached;
+    /// intended to be polled by the frontend while thumbnail generation is in progress.
     /// </para>
     /// </summary>
     [Route("api/dir")]
@@ -32,37 +32,24 @@ namespace ImageGallery.Controllers
             _logger = logger;
         }
 
-        /// <summary>Returns the media index for the gallery root directory.</summary>
-        /// <response code="200">Dictionary of relative path → <see cref="DirectoryWorker.DirItem"/> for all media files and subdirectories.</response>
-        /// <response code="404">Gallery root not found.</response>
-        /// <response code="409">Thumbnail generation is already in progress for this directory; retry shortly.</response>
-        [HttpGet]
-        [Produces("application/json")]
-        [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
-        [ProducesResponseType(typeof(SortedDictionary<string, DirectoryWorker.DirItem>), 200)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)]
-        public Task<IActionResult> Get()
-        {
-            return Get("");
-        }
-
         /// <summary>
-        /// Returns the media index for a gallery subdirectory. Scans the directory, generates any
+        /// Returns the media index for a gallery directory. Scans the directory, generates any
         /// missing thumbnails and icons, then returns the complete index. This request blocks until
         /// generation is complete; poll <c>/api/dir/status/{path}</c> for progress.
+        /// Omit <paramref name="requestPath"/> to retrieve the gallery root.
         /// </summary>
         /// <param name="requestPath">Gallery-relative path to the directory (e.g. <c>2024/Spring</c>).</param>
         /// <response code="200">Dictionary of filename → <see cref="DirectoryWorker.DirItem"/> for all media files and subdirectories.</response>
         /// <response code="404">Directory not found or outside the gallery root.</response>
         /// <response code="409">Thumbnail generation is already in progress for this directory; retry shortly.</response>
+        [HttpGet]
         [HttpGet("{*requestPath}")]
         [Produces("application/json")]
         [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, NoStore = false)]
         [ProducesResponseType(typeof(SortedDictionary<string, DirectoryWorker.DirItem>), 200)]
         [ProducesResponseType(404)]
         [ProducesResponseType(409)]
-        public async Task<IActionResult> Get(String requestPath)
+        public async Task<IActionResult> Get(string requestPath = "")
         {
             String reqPath = requestPath.Replace('/', Path.DirectorySeparatorChar);
             // Normalize both paths to prevent traversal via ../ sequences
@@ -94,31 +81,21 @@ namespace ImageGallery.Controllers
             return NotFound();
         }
 
-        /// <summary>Returns the thumbnail-generation progress for the gallery root directory.</summary>
-        /// <response code="200">Object with <c>percent</c> (0–100) and <c>currentWork</c> (first pending item, or empty string when idle).</response>
-        /// <response code="404">Gallery root directory not found.</response>
-        [HttpGet("status")]
-        [Produces("application/json")]
-        [ProducesResponseType(typeof(ProgressWorker.ProgressStatus), 200)]
-        [ProducesResponseType(404)]
-        public IActionResult Status()
-        {
-            return Status("");
-        }
-
         /// <summary>
-        /// Returns the thumbnail-generation progress for a gallery subdirectory.
-        /// Reads the completion percentage and current work item from the <see cref="ProgressWorker"/>
-        /// memory-mapped file. Returns percent 0 and an empty <c>currentWork</c> when idle.
+        /// Returns the thumbnail-generation progress for a gallery directory.
+        /// Reads the completion percentage and last completed filename from the
+        /// <see cref="ProgressWorker"/> memory-mapped file. Both fields are zero/empty when idle.
+        /// Omit <paramref name="requestPath"/> to query the gallery root.
         /// </summary>
         /// <param name="requestPath">Gallery-relative path to the directory (e.g. <c>2024/Spring</c>).</param>
-        /// <response code="200">Object with <c>percent</c> (0–100) and <c>currentWork</c> (first pending item, or empty string when idle).</response>
+        /// <response code="200">Object with <c>percent</c> (0–100) and <c>currentWork</c> (last completed filename, or empty string when idle).</response>
         /// <response code="404">Directory not found or outside the gallery root.</response>
+        [HttpGet("status")]
         [HttpGet("status/{*requestPath}")]
         [Produces("application/json")]
         [ProducesResponseType(typeof(ProgressWorker.ProgressStatus), 200)]
         [ProducesResponseType(404)]
-        public IActionResult Status(String requestPath)
+        public IActionResult Status(string requestPath = "")
         {
             String reqPath = requestPath.Replace('/', Path.DirectorySeparatorChar);
             // Normalize both paths to prevent traversal via ../ sequences
