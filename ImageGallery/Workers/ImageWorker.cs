@@ -77,7 +77,7 @@ namespace ImageGallery.Workers
 							image.Write(writeStream);
 						}
 
-						progress.FinishedWork(Media.GetThumbName(file));
+						progress.FinishedWork(file.FullName);
 					}
 					catch (IOException ex) when (IsDiskFull(ex))
 					{
@@ -120,7 +120,7 @@ namespace ImageGallery.Workers
 							image.Write(writeStream);
 						}
 
-						progress.FinishedWork(Media.GetIconName(file));
+						progress.FinishedWork(file.FullName);
 					}
 					catch (IOException ex) when (IsDiskFull(ex))
 					{

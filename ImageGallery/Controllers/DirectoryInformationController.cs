@@ -94,12 +94,12 @@ namespace ImageGallery.Controllers
             return NotFound();
         }
 
-        /// <summary>Returns the thumbnail-generation progress percentage for the gallery root directory.</summary>
-        /// <response code="200">Integer 0–100 representing the completion percentage.</response>
+        /// <summary>Returns the thumbnail-generation progress for the gallery root directory.</summary>
+        /// <response code="200">Object with <c>percent</c> (0–100) and <c>currentWork</c> (first pending item, or empty string when idle).</response>
         /// <response code="404">Gallery root directory not found.</response>
         [HttpGet("status")]
         [Produces("application/json")]
-        [ProducesResponseType(typeof(int), 200)]
+        [ProducesResponseType(typeof(ProgressWorker.ProgressStatus), 200)]
         [ProducesResponseType(404)]
         public IActionResult Status()
         {
@@ -107,16 +107,16 @@ namespace ImageGallery.Controllers
         }
 
         /// <summary>
-        /// Returns the thumbnail-generation progress percentage for a gallery subdirectory.
-        /// Reads the completion byte from the <see cref="ProgressWorker"/> memory-mapped file.
-        /// Returns 0 when no generation is currently running.
+        /// Returns the thumbnail-generation progress for a gallery subdirectory.
+        /// Reads the completion percentage and current work item from the <see cref="ProgressWorker"/>
+        /// memory-mapped file. Returns percent 0 and an empty <c>currentWork</c> when idle.
         /// </summary>
         /// <param name="requestPath">Gallery-relative path to the directory (e.g. <c>2024/Spring</c>).</param>
-        /// <response code="200">Integer 0–100 representing the completion percentage.</response>
+        /// <response code="200">Object with <c>percent</c> (0–100) and <c>currentWork</c> (first pending item, or empty string when idle).</response>
         /// <response code="404">Directory not found or outside the gallery root.</response>
         [HttpGet("status/{*requestPath}")]
         [Produces("application/json")]
-        [ProducesResponseType(typeof(int), 200)]
+        [ProducesResponseType(typeof(ProgressWorker.ProgressStatus), 200)]
         [ProducesResponseType(404)]
         public IActionResult Status(String requestPath)
         {
@@ -132,7 +132,7 @@ namespace ImageGallery.Controllers
                 try
                 {
                     using ProgressWorker progress = new ProgressWorker(new DirectoryInfo(realPath));
-                    return Ok(progress.GetProgress());
+                    return Ok(progress.GetStatus());
                 }
                 catch (Exception ex)
                 {

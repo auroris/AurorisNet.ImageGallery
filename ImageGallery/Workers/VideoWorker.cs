@@ -142,12 +142,12 @@ namespace ImageGallery.Workers
 
 				// Generate the icon in the same pass; videoStream is no longer needed for the thumb
 				await GenerateIconAsync(file, videoStream);
-				progress.FinishedWork(Media.GetThumbPath(file));
+				progress.FinishedWork(file.FullName);
 			}
 			else if (type == Media.Type.Icon)
 			{
 				await GenerateIconAsync(file, videoStream);
-				progress.FinishedWork(Media.GetIconPath(file));
+				progress.FinishedWork(file.FullName);
 			}
 
 			return result;

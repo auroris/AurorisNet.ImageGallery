@@ -1,5 +1,5 @@
+Get-ChildItem * -Include _meta.json -Recurse | Remove-Item
 $files = Get-ChildItem -recurse | % { gi $_.FullName -stream * } | Where stream -ne ':$Data';
-Get-ChildItem * -Include *.json -Recurse | Remove-Item
 Foreach ($file in $files)
 {
     Remove-Item -Path $file.FileName -Stream $file.Stream;

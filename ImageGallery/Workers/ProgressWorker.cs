@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.MemoryMappedFiles;
+using System.Text;
 using System.Threading;
 
 namespace ImageGallery.Workers
@@ -9,8 +10,8 @@ namespace ImageGallery.Workers
     /// <summary>
     /// Tracks thumbnail-generation progress for a single directory and exposes it via a
     /// Windows memory-mapped file so the progress can be read from any request without
-    /// shared in-process state. The MMF is named after the directory and holds one byte
-    /// representing the completion percentage (0–100).
+    /// shared in-process state. The MMF is named after the directory and holds a completion
+    /// percentage byte followed by a length-prefixed UTF-8 string of the current work item.
     /// <para>
     /// Callers register each unit of work with <see cref="AddWork"/> before starting it,
     /// then call <see cref="FinishedWork"/> when it completes. The instance disposes itself
@@ -19,6 +20,26 @@ namespace ImageGallery.Workers
     /// </summary>
     public class ProgressWorker : IDisposable
     {
+        // Layout: [0] percent byte  [1-4] int32 LE string-byte-length  [5…] UTF-8 current work item
+        private const int MmfCapacity = 2048;
+        private const int StringDataOffset = 5; // 1 (percent) + 4 (int32 length)
+
+        /// <summary>
+        /// Strips the NTFS Alternate Data Stream suffix from a work path.
+        /// e.g. <c>C:\Gallery\photo.JPG:thumbnail.JPG</c> → <c>C:\Gallery\photo.JPG</c>
+        /// The colon at index 1 (drive letter) is intentionally skipped.
+        /// </summary>
+        private static string StripAds(string work)
+        {
+            int colon = work.IndexOf(':', 2);
+            return colon >= 0 ? work.Substring(0, colon) : work;
+        }
+
+        /// <summary>Snapshot of progress exposed via the MMF.</summary>
+        /// <param name="Percent">Completion percentage (0–100).</param>
+        /// <param name="CurrentWork">The first pending work item, or an empty string when idle.</param>
+        public record ProgressStatus(int Percent, string CurrentWork);
+
         /// <summary>Names of work items that have been registered but not yet completed.</summary>
         private List<string> works = new List<string>();
         private readonly object _lock = new object();
@@ -26,6 +47,7 @@ namespace ImageGallery.Workers
         private int workInitiated = 0;
         private int workCompleted = 0;
         private bool disposedValue;
+        private string _lastFinishedWork = string.Empty;
 
         /// <summary>
         /// Opens or creates the memory-mapped file for <paramref name="workDirectory"/>.
@@ -33,20 +55,29 @@ namespace ImageGallery.Workers
         /// </summary>
         public ProgressWorker(DirectoryInfo workDirectory)
         {
-            mmf = MemoryMappedFile.CreateOrOpen(workDirectory.Name, 1);
+            mmf = MemoryMappedFile.CreateOrOpen(workDirectory.Name, MmfCapacity);
         }
 
         /// <summary>
-        /// Writes the current completion percentage to the first byte of the MMF.
+        /// Writes the current completion percentage and first pending work item to the MMF.
+        /// Must be called under <see cref="_lock"/> (or during single-threaded setup via AddWork).
         /// </summary>
         private void WriteProgress()
         {
             int initiated = workInitiated; // set before tasks start; safe to read without lock
             int completed = Volatile.Read(ref workCompleted);
             byte percent = initiated == 0 ? (byte)0 : (byte)((float)completed / (float)initiated * 100);
+
+            string currentWork = _lastFinishedWork;
+            byte[] workBytes = Encoding.UTF8.GetBytes(currentWork);
+            int workLength = Math.Min(workBytes.Length, MmfCapacity - StringDataOffset);
+
             using (MemoryMappedViewStream stream = mmf.CreateViewStream())
+            using (BinaryWriter writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
             {
-                stream.WriteByte(percent);
+                writer.Write(percent);                      // byte   [0]
+                writer.Write(workLength);                   // int32  [1–4]
+                writer.Write(workBytes, 0, workLength);     // UTF-8  [5…]
             }
         }
 
@@ -59,6 +90,27 @@ namespace ImageGallery.Workers
             using (MemoryMappedViewStream stream = mmf.CreateViewStream())
             {
                 return stream.ReadByte();
+            }
+        }
+
+        /// <summary>
+        /// Reads the current progress percentage and first pending work item from the MMF.
+        /// Returns <see cref="ProgressStatus.CurrentWork"/> as an empty string when idle or
+        /// when no work item has been written yet.
+        /// </summary>
+        public ProgressStatus GetStatus()
+        {
+            using (MemoryMappedViewStream stream = mmf.CreateViewStream())
+            using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true))
+            {
+                int percent = reader.ReadByte();
+                int workLength = reader.ReadInt32();
+                if (workLength > 0 && workLength <= MmfCapacity - StringDataOffset)
+                {
+                    byte[] workBytes = reader.ReadBytes(workLength);
+                    return new ProgressStatus(percent, Encoding.UTF8.GetString(workBytes));
+                }
+                return new ProgressStatus(percent, string.Empty);
             }
         }
 
@@ -86,7 +138,11 @@ namespace ImageGallery.Workers
             lock (_lock)
             {
                 works?.Remove(work);
-                if (!disposedValue) { WriteProgress(); }
+                if (!disposedValue)
+                {
+                    _lastFinishedWork = Path.GetFileName(work);
+                    WriteProgress();
+                }
             }
 
             if (completed == workInitiated)

@@ -42,12 +42,14 @@
 
         $("#progress").show();
         $.getJSON(baseaddr + "dir/status" + dir, function (data) {
+            const percent = data.percent;
             $(".progress-bar")
-                .text(data + "%")
-                .attr("aria-valuenow", data)
-                .css("width", data + "%");
+                .text("Creating thumbnails - " + percent + "%")
+                .attr("aria-valuenow", percent)
+                .css("width", percent + "%");
+            $("#progress-status").text(data.currentWork || "");
 
-            if (data === 100) {
+            if (percent === 100) {
                 $("#progress").hide();
                 if (!dataLoaded) { getDirIndex(dir); }
             } else {
@@ -118,6 +120,9 @@
             Fancybox.unbind("[data-fancybox='gallery']");
             Fancybox.bind("[data-fancybox='gallery']", {
                 Carousel: {
+                    Thumbs: {
+                        showOnStart: false,
+                    },
                     formatCaption: function (carouselRef, slide) {
                         // Title from the gallery overlay div adjacent to the trigger <a>
                         const titleText = slide.triggerEl?.nextElementSibling?.textContent || "";
