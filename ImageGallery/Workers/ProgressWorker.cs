@@ -20,20 +20,9 @@ namespace ImageGallery.Workers
     /// </summary>
     public class ProgressWorker : IDisposable
     {
-        // Layout: [0] percent byte  [1-4] int32 LE string-byte-length  [5…] UTF-8 current work item
+        // Layout: [0] percent byte  [1-4] int32 LE string-byte-length  [5…] UTF-8 work item
         private const int MmfCapacity = 2048;
         private const int StringDataOffset = 5; // 1 (percent) + 4 (int32 length)
-
-        /// <summary>
-        /// Strips the NTFS Alternate Data Stream suffix from a work path.
-        /// e.g. <c>C:\Gallery\photo.JPG:thumbnail.JPG</c> → <c>C:\Gallery\photo.JPG</c>
-        /// The colon at index 1 (drive letter) is intentionally skipped.
-        /// </summary>
-        private static string StripAds(string work)
-        {
-            int colon = work.IndexOf(':', 2);
-            return colon >= 0 ? work.Substring(0, colon) : work;
-        }
 
         /// <summary>Snapshot of progress exposed via the MMF.</summary>
         /// <param name="Percent">Completion percentage (0–100).</param>
