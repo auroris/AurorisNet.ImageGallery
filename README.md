@@ -135,7 +135,7 @@ After publishing, run `./tests/Test-VideoFallback.ps1 -PublishDirectory artifact
 
 ImageGallery follows two packages: Magick.NET, which reads and writes every photo and carries ImageMagick's security fixes, and [AurorisNet.ImageGallery.FFmpeg](https://github.com/auroris/AurorisNet.ImageGallery.FFmpeg), which supplies the FFmpeg tools. Dependabot checks NuGet each day and gives each of the two a pull request of its own. `ci.yml` publishes the application, runs the video check, merges the pull request and starts `release.yml`, which publishes `ImageGallery-<version>-win-x64.zip` and its `.sha256` on a GitHub release. A new major version of either package, such as FFmpeg 10, stays open for a person to review. Versions are `MAJOR.MINOR.PATCH`. The application ships no NuGet package.
 
-No release exists yet: start the first by hand, by running `release.yml` with a version such as `1.0.0`. The [release guide](https://github.com/auroris/AurorisNet.Build/blob/main/docs/releasing.md) describes the workflows.
+To release by hand, run `release.yml` with a version, or leave the version empty to raise the newest one. The [release guide](https://github.com/auroris/AurorisNet.Build/blob/main/docs/releasing.md) describes the workflows.
 
 ## License
 
