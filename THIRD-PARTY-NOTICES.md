@@ -6,7 +6,7 @@ not replace those licenses.
 
 | Component | Where it is | License |
 |---|---|---|
-| FFmpeg 9.0.2, Gyan's Windows x64 [essentials build](https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2) | `ffmpeg/ffmpeg.exe`, `ffmpeg/ffprobe.exe` | GPL version 3 or later. The release includes `ffmpeg/LICENSE.txt`. See the [FFmpeg source for this build](https://github.com/FFmpeg/FFmpeg/tree/946fcce07b) and Gyan's [build details](https://www.gyan.dev/ffmpeg/builds/#release-builds). |
+| AurorisNet.ImageGallery.FFmpeg for Windows x64 | `ffmpeg/ffmpeg.exe`, `ffmpeg/ffprobe.exe` and their DLLs | The FFmpeg build reports GPL version 2 or later. The release includes the licenses and notices for the build and its bundled libraries in `ffmpeg/LICENSE.txt`. The [package releases](https://github.com/auroris/AurorisNet.ImageGallery.FFmpeg/releases) provide the matching sources and build recipes. |
 | [PhotoSwipe 5.4.4](https://github.com/dimsemenov/PhotoSwipe/releases/tag/v5.4.4) | `wwwroot/lib/photoswipe-5.4.4` | MIT. The release includes the [upstream license](https://github.com/dimsemenov/PhotoSwipe/blob/v5.4.4/LICENSE) beside the scripts and stylesheet. |
 | [Magick.NET](https://github.com/dlemstra/Magick.NET) and ImageMagick | `Magick.NET-Q16-x64.dll` and its native library | Apache-2.0 (Magick.NET) and the ImageMagick license. |
 | [MetadataExtractor](https://github.com/drewnoakes/metadata-extractor-dotnet) | `MetadataExtractor.dll` | Apache-2.0. |

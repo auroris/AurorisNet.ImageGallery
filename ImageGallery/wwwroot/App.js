@@ -45,7 +45,7 @@ async function loadDirectory() {
         if (signal.aborted) return;
         for (const [key, item] of Object.entries(entries)) {
             if (item.type === "dir") {
-                folders.append(folderCard(dir, key, item.title));
+                folders.append(folderCard(dir, key, item));
             } else if (item.type === "image" || item.type === "video") {
                 gallery.append(mediaCard(dir, key, item));
             }
@@ -82,20 +82,22 @@ async function showProgress(dir, signal) {
     }
 }
 
-function folderCard(dir, key, title) {
+function folderCard(dir, key, item) {
     const card = document.createElement("div");
     card.className = "gallery-folder";
     const link = document.createElement("a");
-    link.href = "#" + dir + encodeURIComponent(title) + "/";
-    const icon = document.createElement("img");
-    icon.alt = "";
-    icon.src = "/api/media/icon/" + key.split("/").map(encodeURIComponent).join("/");
+    link.href = "#" + dir + encodeURIComponent(item.title) + "/";
     const face = document.createElement("div");
-    face.append(icon);
+    if (!item.previewUnavailable) {
+        const icon = document.createElement("img");
+        icon.alt = "";
+        icon.src = "/api/media/icon/" + key.split("/").map(encodeURIComponent).join("/");
+        face.append(icon);
+    }
     const folder = document.createElement("div");
     folder.append(face);
     const label = document.createElement("span");
-    label.textContent = title;
+    label.textContent = item.title;
     link.append(folder, label);
     card.append(link);
     return card;
@@ -110,26 +112,31 @@ function mediaCard(dir, key, item) {
     link.dataset.title = item.title;
     link.dataset.meta = "/api/media/meta" + path;
     link.setAttribute("aria-label", item.title);
-    let preview;
-    if (item.type === "video") {
+    if (item.previewUnavailable) {
+        link.className = "original-video";
+        link.textContent = "Open original video";
+        link.setAttribute("aria-label", "Open original video " + item.title);
+    } else if (item.type === "video") {
         link.dataset.pswpType = "video";
         link.dataset.icon = "/api/media/icon" + path;
-        preview = document.createElement("video");
+        const preview = document.createElement("video");
         preview.muted = true;
         preview.loop = true;
         preview.autoplay = true;
         preview.playsInline = true;
         preview.poster = link.dataset.icon;
+        preview.src = "/api/media/thumb" + path;
+        link.append(preview);
     } else {
         if (item.width && item.height) {
             link.dataset.pswpWidth = item.width;
             link.dataset.pswpHeight = item.height;
         }
-        preview = document.createElement("img");
+        const preview = document.createElement("img");
         preview.alt = item.title;
+        preview.src = "/api/media/thumb" + path;
+        link.append(preview);
     }
-    preview.src = "/api/media/thumb" + path;
-    link.append(preview);
 
     const overlay = document.createElement("div");
     overlay.className = "gallery-" + item.type;

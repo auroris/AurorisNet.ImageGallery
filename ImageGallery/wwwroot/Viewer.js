@@ -3,7 +3,7 @@ import PhotoSwipeLightbox from "./lib/photoswipe-5.4.4/photoswipe-lightbox.esm.m
 export function createViewer(gallery) {
     const lightbox = new PhotoSwipeLightbox({
         gallery,
-        children: "a",
+        children: "a:not(.original-video)",
         pswpModule: () => import("./lib/photoswipe-5.4.4/photoswipe.esm.min.js"),
         showHideAnimationType: "none",
         secondaryZoomLevel: 1,

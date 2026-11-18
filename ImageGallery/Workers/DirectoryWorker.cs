@@ -38,7 +38,7 @@ namespace ImageGallery.Workers
 		public async Task<SortedDictionary<string, DirItem>> ProcessAsync(DirectoryInfo workDirectory, bool overwrite)
 		{
 			bool dirty = false;
-			ProgressWorker progress = new ProgressWorker(workDirectory);
+			using ProgressWorker progress = new ProgressWorker(workDirectory);
 			List<Task<MediaResult>> mediaProcessingTasks = new List<Task<MediaResult>>();
 			SortedDictionary<string, DirItem> mediaList = new SortedDictionary<string, DirItem>(); // New metadata
 			SortedDictionary<string, DirItem> mediaListOld = new SortedDictionary<string, DirItem>(); // Old cached metadata
@@ -66,12 +66,12 @@ namespace ImageGallery.Workers
 				FileInfo iconFullPath = FindFirst(dir);
 				if (iconFullPath == null) { continue; }
 
-				string iconRelativePath = iconFullPath.FullName.Substring(Configuration.Get.GalleryPath.Length + 1).Replace('\\', '/');
+				string iconRelativePath = Path.GetRelativePath(Configuration.Get.GalleryPath, iconFullPath.FullName).Replace('\\', '/');
 
-				if (!mediaListOld.ContainsKey(iconRelativePath) // If the old media list doesn't contain this dir (because it's new), or
-					|| overwrite) // We're instructed to re-generate all data
+				if (!mediaListOld.TryGetValue(iconRelativePath, out DirItem cachedFolder) || overwrite
+					|| (cachedFolder.PreviewUnavailable && cachedFolder.Updated != iconFullPath.LastWriteTimeUtc))
 				{
-					progress.AddWork(Media.GetIconPath(iconFullPath));
+					progress.AddWork(iconFullPath.FullName);
 					iconWork.Add(iconFullPath);
 
 					mediaList.Add(iconRelativePath, new DirItem
@@ -84,20 +84,20 @@ namespace ImageGallery.Workers
 				else
                 {
 					// No updates, simply copy the old data to the new
-					mediaList.Add(iconRelativePath, mediaListOld[iconRelativePath]);
+					mediaList.Add(iconRelativePath, cachedFolder);
                 }
 			}
 
 			// List files in the dir
 			foreach (FileInfo file in workDirectory.GetFiles())
 			{
-				if (!mediaListOld.TryGetValue(file.Name, out DirItem cachedItem) // If the old media list doesn't contain this file (because it's new), or
-					|| overwrite) // We're instructed to re-generate all data
+				if (!mediaListOld.TryGetValue(file.Name, out DirItem cachedItem) || overwrite
+					|| (cachedItem.PreviewUnavailable && cachedItem.Updated != file.LastWriteTimeUtc))
 				{
 					String ext = file.Extension.ToLower().Trim('.');
 					if (Configuration.Get.Image.Ext.Contains(ext) || Configuration.Get.Video.Ext.Contains(ext))
 					{
-						progress.AddWork(Media.GetIconPath(file));
+						progress.AddWork(file.FullName);
 						thumbWork.Add(file);
 					}
 				}
@@ -150,71 +150,67 @@ namespace ImageGallery.Workers
 				}
 			}
 
-			// Result of jobs processing
-			try
-            {
-				// Wait for all media processing tasks to complete
-				await Task.WhenAll(mediaProcessingTasks);
+			foreach (MediaResult mediaResult in await Task.WhenAll(mediaProcessingTasks))
+			{
+				dirty = true;
 
-				foreach (Task<MediaResult> task in mediaProcessingTasks)
-                {
-					dirty = true;
-
-                    MediaResult mediaResult = task.Result;
-					string ext = mediaResult.File.Extension.ToLower().Trim('.');
-					if (mediaResult.Type == Media.Type.Thumb)
+				string ext = mediaResult.File.Extension.ToLower().Trim('.');
+				if (mediaResult.Type == Media.Type.Thumb)
+				{
+					DirItem item = new DirItem
 					{
-						DirItem item = new DirItem { Title = mediaResult.Title, Updated = DateTime.Now };
-						if (Configuration.Get.Image.Ext.Contains(ext))
-						{
-							item.Type = "image";
-							item.Width = mediaResult.Width;
-							item.Height = mediaResult.Height;
-						}
-						else if (Configuration.Get.Video.Ext.Contains(ext))
-						{
-							item.Type = "video";
-						}
-						else
-						{
-							item.Type = "unknown";
-						}
-
-						mediaList.Add(mediaResult.File.Name, item);
+						Title = mediaResult.Title,
+						Updated = mediaResult.PreviewUnavailable ? mediaResult.File.LastWriteTimeUtc : DateTime.Now,
+						PreviewUnavailable = mediaResult.PreviewUnavailable
+					};
+					if (Configuration.Get.Image.Ext.Contains(ext))
+					{
+						item.Type = "image";
+						item.Width = mediaResult.Width;
+						item.Height = mediaResult.Height;
+					}
+					else if (Configuration.Get.Video.Ext.Contains(ext))
+					{
+						item.Type = "video";
+					}
+					else
+					{
+						item.Type = "unknown";
 					}
 
-					try
+					mediaList.Add(mediaResult.File.Name, item);
+				}
+				else if (mediaResult.PreviewUnavailable)
+				{
+					string key = Path.GetRelativePath(Configuration.Get.GalleryPath, mediaResult.File.FullName).Replace('\\', '/');
+					mediaList[key].PreviewUnavailable = true;
+					mediaList[key].Updated = mediaResult.File.LastWriteTimeUtc;
+				}
+
+				if (mediaResult.PreviewUnavailable) continue;
+
+				try
+				{
+					using (FileStream fs = mediaResult.File.GetAlternateDataStream(Configuration.Get.MetaFile, FileMode.OpenOrCreate).OpenWrite())
 					{
-						using (FileStream fs = mediaResult.File.GetAlternateDataStream(Configuration.Get.MetaFile, FileMode.OpenOrCreate).OpenWrite())
+						fs.SetLength(0);
+						fs.Flush(); // delete the contents of the file first
+						byte[] bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new FileMeta()
 						{
-							fs.SetLength(0);
-							fs.Flush(); // delete the contents of the file first
-							byte[] bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new FileMeta()
-							{
-								Caption = mediaResult.Caption
-							}));
-							fs.Write(bytes, 0, bytes.Length);
-						}
-					}
-					catch (IOException ioEx) when (IsDiskFull(ioEx))
-					{
-						logger.LogError(ioEx, "Disk full while writing metadata ADS for {Path} on volume {Volume}",
-							mediaResult.File.FullName, Path.GetPathRoot(mediaResult.File.FullName));
-					}
-					catch (IOException ioEx)
-					{
-						logger.LogError(ioEx, "I/O error writing metadata ADS for {Path}. Verify the volume supports " +
-							"NTFS alternate data streams and the app has write permission", mediaResult.File.FullName);
+							Caption = mediaResult.Caption
+						}));
+						fs.Write(bytes, 0, bytes.Length);
 					}
 				}
-			}
-			catch (AggregateException e)
-            {
-				// Log each worker failure individually for easier diagnosis
-				foreach (Exception inner in e.InnerExceptions)
+				catch (IOException ioEx) when (IsDiskFull(ioEx))
 				{
-					progress.FinishedWork("Error");
-					logger.LogError(inner, "Worker failed while processing directory {Path}", workDirectory.FullName);
+					logger.LogError(ioEx, "Disk full while writing metadata ADS for {Path} on volume {Volume}",
+						mediaResult.File.FullName, Path.GetPathRoot(mediaResult.File.FullName));
+				}
+				catch (IOException ioEx)
+				{
+					logger.LogError(ioEx, "I/O error writing metadata ADS for {Path}. Verify the volume supports " +
+						"NTFS alternate data streams and the app has write permission", mediaResult.File.FullName);
 				}
 			}
 
@@ -290,6 +286,8 @@ namespace ImageGallery.Workers
 			public string Type { get; set; }
 			public string Title { get; set; }
 			public DateTime Updated { get; set; }
+			[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+			public bool PreviewUnavailable { get; set; }
 			[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 			public int Width { get; set; }
 			[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

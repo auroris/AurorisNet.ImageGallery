@@ -12,29 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <FFmpegArchive Include="ffmpeg\ffmpeg-9.0.2-win-x64.zip" />
-    <FFmpegFile Include="ffmpeg.exe;ffprobe.exe;LICENSE.txt" />
-  </ItemGroup>
-
-  <Target Name="ExtractFFmpeg" Inputs="@(FFmpegArchive)" Outputs="@(FFmpegFile->'$(IntermediateOutputPath)ffmpeg\%(Identity)')">
-    <Unzip SourceFiles="@(FFmpegArchive)" DestinationFolder="$(IntermediateOutputPath)ffmpeg" />
-    <Touch Files="@(FFmpegFile->'$(IntermediateOutputPath)ffmpeg\%(Identity)')" />
-  </Target>
-
-  <Target Name="IncludeFFmpeg" BeforeTargets="AssignTargetPaths" DependsOnTargets="ExtractFFmpeg">
-    <ItemGroup>
-      <Content Include="@(FFmpegFile->'$(IntermediateOutputPath)ffmpeg\%(Identity)')"
-               Link="ffmpeg\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    </ItemGroup>
-  </Target>
-
-  <ItemGroup>
     <Content Include="DemoGallery\**\*" Condition="'$(Configuration)'=='Debug'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AurorisNet.ImageGallery.FFmpeg" Version="9.0.2" />
     <PackageReference Include="Magick.NET-Q16-x64" Version="15.1.0" />
     <PackageReference Include="MetadataExtractor" Version="2.9.3" />
     <PackageReference Include="NReco.Logging.File" Version="1.4.0" />

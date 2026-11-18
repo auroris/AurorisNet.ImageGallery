@@ -20,7 +20,7 @@ on:
           - patch
           - minor
       test:
-        description: Accepted so the automated runs can start this workflow like the others. The repository has no tests yet.
+        description: Test video preview fallback in the published application
         type: boolean
         default: true
       dry-run:
@@ -82,6 +82,10 @@ jobs:
           dotnet publish ImageGallery/ImageGallery.csproj -c Release -r win-x64 --self-contained false `
             "-p:Version=$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true -o artifacts/publish
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the application.' }
+
+      - name: Test the video preview fallback
+        if: inputs.test
+        run: ./tests/Test-VideoFallback.ps1 -PublishDirectory artifacts/publish
 
       # The ZIP carries the licenses of the components it bundles, beside the README.
       - name: Package the ZIP and its checksum

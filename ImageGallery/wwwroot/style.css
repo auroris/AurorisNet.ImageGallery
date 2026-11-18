@@ -23,6 +23,12 @@
         display: block;
     }
 
+    .gallery-item > .original-video {
+        display: grid;
+        place-items: center;
+        min-height: 150px;
+    }
+
     .gallery-item img, .gallery-item video {
         display: block;
         width: auto;

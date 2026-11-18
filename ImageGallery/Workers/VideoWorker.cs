@@ -12,6 +12,12 @@ namespace ImageGallery.Workers
 	/// <summary>Generates a silent MP4 thumbnail and a PNG icon in the video's NTFS alternate data streams.</summary>
 	public class VideoWorker(ILogger<VideoWorker> logger)
 	{
+		// FFmpeg's AVERROR values from libavutil/error.h and its documented -max_error_rate exit status.
+		private const int InvalidMediaData = -1094995529;
+		private const int DecoderNotFound = -1128613112;
+		private const int DemuxerNotFound = -1296385272;
+		private const int DecodeErrorRateExceeded = 69;
+
 		public async Task<MediaResult> ProcessAsync(FileInfo file, ProgressWorker progress, Media.Type type)
 		{
 			try
@@ -56,8 +62,12 @@ namespace ImageGallery.Workers
 						"-vf", filter, "-frames:v", "1", "-c:v", "png", "-f", "image2", "-update", "1");
 				}
 
-				progress.FinishedWork(file.FullName);
 				return result;
+			}
+			catch (InvalidDataException ex)
+			{
+				logger.LogWarning(ex, "Video preview unavailable for {Path}", file.FullName);
+				return new MediaResult { File = file, Title = file.Name, Type = type, PreviewUnavailable = true };
 			}
 			catch (IOException ex) when (ex.HResult == unchecked((int)0x80070070) || ex.HResult == unchecked((int)0x80070027))
 			{
@@ -71,12 +81,16 @@ namespace ImageGallery.Workers
 					file.FullName, Configuration.Get.TempDir);
 				throw;
 			}
+			finally
+			{
+				progress.FinishedWork(file.FullName);
+			}
 		}
 
 		private static async Task<(int Width, int Height, double Duration)> ProbeAsync(FileInfo file)
 		{
-			string json = await RunToolAsync("ffprobe", "-select_streams", "V:0",
-				"-show_entries", "stream=width,height,duration:format=duration", "-of", "json", "-i", file.FullName);
+			string json = await RunToolAsync("ffprobe", "-select_streams", "V:0", "-show_error",
+				"-show_entries", "stream=width,height,coded_width,duration:format=duration:error=code", "-of", "json", "-i", file.FullName);
 			using var document = JsonDocument.Parse(json);
 			var root = document.RootElement;
 			var streams = root.GetProperty("streams");
@@ -84,9 +98,12 @@ namespace ImageGallery.Workers
 				throw new InvalidDataException($"No video stream found in {file.FullName}.");
 
 			var stream = streams[0];
-			int width = stream.GetProperty("width").GetInt32();
-			int height = stream.GetProperty("height").GetInt32();
-			if (width <= 0 || height <= 0)
+			// Header dimensions can exist even when the binary has no decoder for the stream.
+			// FFprobe emits coded_width from the opened decoder context.
+			if (!stream.TryGetProperty("coded_width", out _))
+				throw new InvalidDataException($"No video decoder available for {file.FullName}.");
+			if (!stream.TryGetProperty("width", out var widthProperty) || !widthProperty.TryGetInt32(out int width) || width <= 0
+				|| !stream.TryGetProperty("height", out var heightProperty) || !heightProperty.TryGetInt32(out int height) || height <= 0)
 				throw new InvalidDataException($"Invalid video dimensions in {file.FullName}.");
 
 			double duration = ReadDuration(stream);
@@ -155,9 +172,32 @@ namespace ImageGallery.Workers
 			string stdout = await output;
 			string stderr = await errorOutput;
 			if (process.ExitCode != 0)
+			{
+				// FFmpeg on Windows returns its native error, while FFprobe reports it in JSON.
+				int errorCode = tool == "ffprobe" ? ReadProbeErrorCode(stdout) : process.ExitCode;
+				if (errorCode is InvalidMediaData or DecoderNotFound or DemuxerNotFound ||
+					(tool == "ffmpeg" && errorCode == DecodeErrorRateExceeded))
+					throw new InvalidDataException(stderr.Trim());
 				throw new InvalidOperationException($"{tool} exited with code {process.ExitCode}: {stderr.Trim()}");
+			}
 
 			return stdout;
+		}
+
+		private static int ReadProbeErrorCode(string json)
+		{
+			try
+			{
+				using var document = JsonDocument.Parse(json);
+				if (document.RootElement.TryGetProperty("error", out var error)
+					&& error.TryGetProperty("code", out var code) && code.TryGetInt32(out var number))
+					return number;
+			}
+			catch (JsonException)
+			{
+				// Startup and configuration failures can exit before producing a JSON report.
+			}
+			return 0;
 		}
 	}
 }

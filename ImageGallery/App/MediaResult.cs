@@ -33,5 +33,8 @@ namespace ImageGallery
 
         /// <summary>Whether this job produced a thumbnail or an icon.</summary>
         public Media.Type Type;
+
+        /// <summary>The original video can be served, but its preview could not be decoded.</summary>
+        public bool PreviewUnavailable;
     }
 }

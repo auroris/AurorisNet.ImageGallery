@@ -43,6 +43,8 @@ The settings are top-level keys of `appsettings.json`.
 | `MediaClipLength` | `15` | The length of the thumbnail clip in seconds. |
 | `RegenerateThumbnails` | `false` | `true` generates every thumbnail and icon again each time a folder is opened. Set it back to `false` afterwards. |
 
+The bundled FFmpeg tools can generate previews from H.264, HEVC, VP8, VP9 and AV1 video in MP4, MOV, WebM and Matroska containers. Add the extensions you want the gallery to scan to `Videos`, for example `["mp4", "mov", "webm", "mkv"]`. If the gallery cannot generate a video preview, it still shows a link to the original. Playback uses the browser's installed codecs.
+
 The application logs to the console and writes `application.log` beside the executable. At 1 MiB it rolls the file to `application1.log` and keeps one backup. The `Logging` section controls log levels.
 
 ## How it works
@@ -92,6 +94,8 @@ The thumbnail, icon and caption routes answer `404` for a file whose stream has 
 }
 ```
 
+A video or folder whose preview could not be generated has `"previewUnavailable": true` in the index. The gallery retries when the source video changes or `RegenerateThumbnails` is enabled.
+
 ## Supported versions
 
 | Component | Version |
@@ -105,6 +109,8 @@ The thumbnail, icon and caption routes answer `404` for a file whose stream has 
 
 You need the .NET 10 SDK on Windows.
 
+The `AurorisNet.ImageGallery.FFmpeg` NuGet package supplies the Windows x64 executables, codec libraries and license notices. Build and publish copy them into the application's `ffmpeg` directory.
+
 ```powershell
 dotnet build ImageGallery -c Release
 dotnet run --project ImageGallery
@@ -114,7 +120,7 @@ dotnet publish ImageGallery/ImageGallery.csproj -c Release -r win-x64 --self-con
 
 `dotnet run` listens on `http://localhost:5000`. Point `GalleryPath` at a folder of photos first; the default, `DemoGallery`, is a folder beside the application that the repository does not include.
 
-The repository has no test project. The workflows build and publish the application, and that build is the only check.
+After publishing, run `./tests/Test-VideoFallback.ps1 -PublishDirectory artifacts/publish` in PowerShell 7.4 or later on Windows. CI runs this check against a folder of playable, truncated and encrypted videos.
 
 `CleanImageGallery.ps1` resets a gallery folder. Run it in that folder: it deletes every `_meta.json` file below it and **every alternate data stream of every file below it**, including streams other software wrote.
 
@@ -124,7 +130,6 @@ The repository has no test project. The workflows build and publish the applicat
 | `ImageGallery/Controllers` | The `/api/dir` and `/api/media` routes. |
 | `ImageGallery/Workers` | Folder scanning, photo and video generation, and the progress record, a memory-mapped file named for the folder. |
 | `ImageGallery/wwwroot` | The gallery page and its bundled PhotoSwipe viewer. |
-| `ImageGallery/ffmpeg` | The pinned Windows x64 FFmpeg archive. The build extracts `ffmpeg.exe`, `ffprobe.exe` and their license into the output's `ffmpeg` directory. |
 
 ## Releases
 

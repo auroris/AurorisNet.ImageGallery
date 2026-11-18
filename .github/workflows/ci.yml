@@ -1,7 +1,7 @@
 name: CI
 
-# Builds each pull request, and merges a Dependabot update that builds. An update of a package the application
-# references then starts the Release workflow. The repository has no test project yet, so the build is the check.
+# Publishes and tests each pull request before merging Dependabot updates.
+# An update of a package the application references then starts the Release workflow.
 on:
   pull_request:
   workflow_dispatch:
@@ -38,6 +38,9 @@ jobs:
 
       - name: Publish the application
         run: dotnet publish ImageGallery/ImageGallery.csproj -c Release -r win-x64 --self-contained false -o artifacts/publish
+
+      - name: Test the video preview fallback
+        run: ./tests/Test-VideoFallback.ps1 -PublishDirectory artifacts/publish
 
   # A workflow that runs for Dependabot gets a read-only token unless the job asks for more.
   dependabot:
