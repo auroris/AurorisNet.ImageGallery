@@ -1,16 +1,16 @@
 # ImageGallery
 
-A web gallery for a folder of photos and videos, which keeps each file's thumbnail, icon and caption inside the file itself.
+A web gallery for a folder of photos and videos, which keeps each file's thumbnail, icon and caption in NTFS Alternate Data Streams.
 
 ![MIT license](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/license-mit.svg)
 ![.NET 10](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/dotnet-10.svg)
 ![Windows](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/windows.svg)
 
-ImageGallery is an ASP.NET Core 10 application that serves a folder, or a network share, as a gallery in the browser. People manage the folder with their own tools: they copy files in, rename them, move them and delete them. The gallery follows, because it stores what it generates in NTFS alternate data streams on the media files:
+ImageGallery is an ASP.NET Core 10 application that serves a folder as a gallery in the browser. People manage the folder with their own tools: they copy files in, rename them, move them and delete them. The gallery follows, because it stores what it generates in NTFS alternate data streams on the media files:
 
 - **Each file carries its own cache.** The thumbnail, the icon and the caption are named streams of the photo or video, such as `photo.jpg:thumbnail.jpg`. A file that is renamed or moved on NTFS keeps them, and a file that is deleted takes them with it. There is no database to keep in step with the folder.
 - **Thumbnails appear on the first visit.** Opening a folder in the gallery generates what its new files lack, and shows progress while it works. Later visits read the streams.
-- **Photos and videos.** A photo gets a cropped thumbnail and a small icon, made with ImageMagick. A video gets a short silent clip as its thumbnail and a still frame as its icon, made with FFmpeg. A video that FFmpeg cannot decode still appears, as a link to the original file.
+- **Photos and videos.** A photo gets a cropped thumbnail and a small icon, made with ImageMagick. A video gets a short silent clip as its thumbnail and a still frame as its icon, made with FFmpeg. A video that FFmpeg cannot decode still appears as a link to the original file.
 - **Titles and captions from the files.** The gallery reads the IPTC **Object Name** as the title and **Caption/Abstract** as the caption, and uses the file name when a file has no title.
 
 ## Install
