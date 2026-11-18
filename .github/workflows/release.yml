@@ -1,0 +1,106 @@
+name: Release
+
+run-name: Release ${{ inputs.version || format('(next {0})', inputs.bump) }}${{ inputs.dry-run && ' (dry run)' || '' }}
+
+# Publishes the application as a ZIP on a GitHub release. Starts by hand, or from the CI workflow when a Dependabot update
+# of a package the application references has built. The shared steps come from auroris/AurorisNet.Build, whose
+# docs/releasing.md describes them. The application ships no NuGet package, so nothing goes to nuget.org.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, such as 1.2.3 or 1.2.3-rc.1. Leave empty to raise the newest release tag.
+        required: false
+        type: string
+      bump:
+        description: Which part of the newest stable tag to raise when the version is empty
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+      test:
+        description: Accepted so the automated runs can start this workflow like the others. The repository has no tests yet.
+        type: boolean
+        default: true
+      dry-run:
+        description: Build and package only, and keep the ZIP as an artifact
+        type: boolean
+        default: false
+      notes:
+        description: Notes for the GitHub release, in Markdown, shown above the generated list of changes
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  release:
+    name: Build and publish
+    # The application reads NTFS alternate data streams and bundles ffmpeg.exe, so it builds and runs on Windows only.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Choose the version
+        id: version
+        uses: auroris/AurorisNet.Build/actions/version@main
+        with:
+          version: ${{ inputs.version }}
+          bump: ${{ inputs.bump }}
+          dry-run: ${{ inputs.dry-run }}
+
+      # A framework-dependent build for Windows x64: the server needs the .NET 10 ASP.NET Core runtime, or the Hosting
+      # Bundle under IIS.
+      - name: Publish the application
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dotnet publish ImageGallery/ImageGallery.csproj -c Release -r win-x64 --self-contained false `
+            "-p:Version=$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true -o artifacts/publish
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the application.' }
+
+      # The ZIP carries the licenses of the components it bundles, beside the README.
+      - name: Package the ZIP and its checksum
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Copy-Item -Path README.md, LICENSE, THIRD-PARTY-NOTICES.md -Destination artifacts/publish
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+          $name = "ImageGallery-$env:RELEASE_VERSION-win-x64.zip"
+          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/release/$name"
+          $hash = (Get-FileHash "artifacts/release/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/artifacts/release/$name.sha256", "$hash  $name`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Publish
+        uses: auroris/AurorisNet.Build/actions/publish@main
+        with:
+          versions: ${{ steps.version.outputs.versions }}
+          assets: |
+            artifacts/release/*.zip
+            artifacts/release/*.sha256
+          dry-run: ${{ inputs.dry-run }}
+          notes: ${{ inputs.notes }}

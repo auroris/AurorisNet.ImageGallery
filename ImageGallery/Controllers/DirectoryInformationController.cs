@@ -26,10 +26,12 @@ namespace ImageGallery.Controllers
     public class DirectoryInformationController : ControllerBase
     {
         private readonly ILogger<DirectoryInformationController> _logger;
+        private readonly DirectoryWorker _directoryWorker;
 
-        public DirectoryInformationController(ILogger<DirectoryInformationController> logger)
+        public DirectoryInformationController(ILogger<DirectoryInformationController> logger, DirectoryWorker directoryWorker)
         {
             _logger = logger;
+            _directoryWorker = directoryWorker;
         }
 
         /// <summary>
@@ -62,8 +64,7 @@ namespace ImageGallery.Controllers
             {
                 try
                 {
-                    DirectoryWorker worker = new DirectoryWorker(new DirectoryInfo(realPath));
-                    var result = await worker.ProcessAsync(Configuration.Get.RegenerateThumbnails);
+                    var result = await _directoryWorker.ProcessAsync(new DirectoryInfo(realPath), Configuration.Get.RegenerateThumbnails);
                     if (result == null)
                     {
                         // Generation already in progress for this directory

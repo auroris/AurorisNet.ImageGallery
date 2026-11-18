@@ -1,15 +1,14 @@
 using System;
 using System.IO;
-using System.Reflection;
+using ImageGallery.Workers;
 using ImageMagick;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Xabe.FFmpeg;
+using NReco.Logging.File;
 
 namespace ImageGallery
 {
@@ -29,11 +28,18 @@ namespace ImageGallery
 		{
 			var builder = WebApplication.CreateBuilder(args);
 
-			// Route all logging through log4net using the XML config file in the app directory
 			builder.Logging.ClearProviders();
-			builder.Logging.AddLog4Net(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "log4net.xml"));
-			builder.Logging.SetMinimumLevel(LogLevel.Debug);
+			builder.Logging.AddConsole();
+			builder.Logging.AddFile(Path.Combine(AppContext.BaseDirectory, "application.log"), options =>
+			{
+				options.FileSizeLimitBytes = 1024 * 1024;
+				options.MaxRollingFiles = 2;
+				options.RollingFilesConvention = FileLoggerOptions.FileRollingConvention.AscendingStableBase;
+			});
 
+			builder.Services.AddTransient<DirectoryWorker>();
+			builder.Services.AddTransient<ImageWorker>();
+			builder.Services.AddTransient<VideoWorker>();
 			builder.Services.AddResponseCaching();
 			builder.Services.AddControllers();
 			builder.Services.AddEndpointsApiExplorer();
@@ -43,7 +49,6 @@ namespace ImageGallery
 
 			// Make configuration available to the Configuration singleton before anything else reads it
 			AppConfiguration = builder.Configuration;
-			log4net.Config.XmlConfigurator.Configure(new FileInfo(Configuration.Get.LogDir));
 
 			if (app.Environment.IsDevelopment())
 			{
@@ -95,7 +100,6 @@ namespace ImageGallery
 					$"Temp directory is not writable: {Configuration.Get.TempDir} — check that the path exists and the application has write permissions.", ex);
 			}
 			MagickNET.SetTempDirectory(Configuration.Get.TempDir);
-			FFmpeg.SetExecutablesPath(Path.Combine(builder.Environment.ContentRootPath, "ffmpeg"));
 
 			app.Run();
 		}

@@ -1,5 +1,5 @@
-using log4net;
 using MetadataExtractor;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,8 +12,6 @@ namespace ImageGallery
     /// </summary>
     public class Media
     {
-        private static readonly ILog Log = LogManager.GetLogger(typeof(Media));
-
         /// <summary>Distinguishes between the two derivative types produced for each media file.</summary>
         public enum Type
         {
@@ -35,7 +33,7 @@ namespace ImageGallery
 
         /// <summary>
         /// Returns the ADS stream name for the thumbnail, e.g. <c>thumbnail.jpg</c>.
-        /// The extension matches the source file so the MIME type is inferred correctly.
+        /// The stream keeps the source extension, including for video previews encoded as MP4.
         /// </summary>
         public static string GetThumbName(FileInfo file)
         {
@@ -75,7 +73,7 @@ namespace ImageGallery
         /// flat dictionary keyed by tag name. Duplicate tag names are silently ignored
         /// (first occurrence wins). Returns an empty dictionary if no metadata is found.
         /// </summary>
-        public static Dictionary<string, string> GetMeta(FileInfo file)
+        public static Dictionary<string, string> GetMeta(FileInfo file, ILogger logger)
         {
             Dictionary<string, string> metaDic = new Dictionary<string, string>();
 
@@ -87,7 +85,7 @@ namespace ImageGallery
             }
             catch (Exception ex)
             {
-                Log.Warn($"Failed to read metadata from: {file.FullName}", ex);
+                logger.LogWarning(ex, "Failed to read metadata from {Path}", file.FullName);
             }
 
             return metaDic;

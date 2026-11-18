@@ -19,18 +19,23 @@
         box-shadow: 0 0 16px #333;
     }
 
+    .gallery-item > a {
+        display: block;
+    }
+
     .gallery-item img, .gallery-item video {
         display: block;
         width: auto;
         min-height: 100%;
         margin-left: 50%;
         transform: translateX(-50%);
-        pointer-events: none; /* let clicks fall through to the <a> tag for Fancybox */
+        pointer-events: none; /* The card link opens the viewer. */
     }
 
     .gallery-item > div {
         position: absolute;
         height: 0px;
+        pointer-events: none;
     }
 
         .gallery-item > div > div {
@@ -156,4 +161,85 @@
     list-style: none;
     background-color: #e9ecef;
     border-radius: .25rem;
+}
+
+.pswp__footer {
+    position: absolute;
+    inset: auto 0 0;
+    background: rgb(0 0 0 / 80%);
+    color: white;
+    font: 1rem/1.4 system-ui, sans-serif;
+    text-align: center;
+}
+
+.viewer-details {
+    max-height: 22vh;
+    overflow: auto;
+    padding: .35rem 1rem;
+    overflow-wrap: anywhere;
+}
+
+.viewer-details strong,
+.viewer-details span:not(:empty) {
+    display: block;
+    white-space: pre-line;
+}
+
+.viewer-details a {
+    color: white;
+}
+
+.viewer-video {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 0 var(--viewer-footer-height, 60px);
+    pointer-events: none;
+}
+
+.viewer-video video {
+    max-width: 100%;
+    max-height: 100%;
+    pointer-events: auto;
+}
+
+.pswp--touch .pswp__button--arrow {
+    visibility: visible;
+}
+
+.pswp__button--slideshow,
+.pswp__button--thumbnails,
+.pswp__button--fullscreen {
+    color: white;
+    font: 24px/1 sans-serif;
+}
+
+.viewer-thumbnails:not([hidden]) {
+    display: flex;
+    gap: 4px;
+    max-width: max-content;
+    margin: auto;
+    padding: 4px;
+    box-sizing: border-box;
+    overflow-x: auto;
+}
+
+.viewer-thumbnails button {
+    flex: none;
+    border: 2px solid transparent;
+    padding: 0;
+    background: none;
+    cursor: pointer;
+}
+
+.viewer-thumbnails button[aria-current] {
+    border-color: white;
+}
+
+.viewer-thumbnails img {
+    display: block;
+    width: 52px;
+    height: 44px;
+    object-fit: cover;
 }

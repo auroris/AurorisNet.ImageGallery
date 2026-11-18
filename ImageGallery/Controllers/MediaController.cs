@@ -23,7 +23,7 @@ namespace ImageGallery.Controllers
             _logger = logger;
         }
 
-        /// <summary>Returns the animated MP4 thumbnail clip for a media file, read from its NTFS ADS.</summary>
+        /// <summary>Returns the image thumbnail or silent MP4 preview stored in the file's NTFS ADS.</summary>
         /// <param name="requestPath">Gallery-relative path to the file (e.g. <c>2024/photo.jpg</c>).</param>
         /// <response code="200">The thumbnail video stream.</response>
         /// <response code="404">File not found, outside the gallery root, or thumbnail not yet generated.</response>
@@ -34,7 +34,10 @@ namespace ImageGallery.Controllers
         public IActionResult GetThumbnail(String requestPath)
         {
             FileInfo file = GetFileInfo(requestPath);
-            return GetFile(file, Media.GetThumbName(file));
+            if (file == null) return NotFound();
+            string extension = file.Extension.TrimStart('.').ToLowerInvariant();
+            string contentType = Configuration.Get.Video.Ext.Contains(extension) ? "video/mp4" : Mime.GetType(file.Name);
+            return GetFile(file, Media.GetThumbName(file), contentType);
         }
 
         /// <summary>Returns the static PNG icon for a media file, read from its NTFS ADS.</summary>
@@ -83,7 +86,7 @@ namespace ImageGallery.Controllers
 
         // Serves either an NTFS alternate data stream (when dataStream is provided) or the file
         // itself. Returns 404 when the file or stream does not exist.
-        private IActionResult GetFile(FileInfo file, string dataStream = null)
+        private IActionResult GetFile(FileInfo file, string dataStream = null, string contentType = null)
         {
             if (file == null) { return NotFound(); }
 
@@ -91,12 +94,12 @@ namespace ImageGallery.Controllers
             {
                 if (dataStream != null && file.Exists && file.AlternateDataStreamExists(dataStream))
                 {
-                    return File(file.GetAlternateDataStream(dataStream, FileMode.Open).OpenRead(), Mime.GetType(dataStream));
+                    return File(file.GetAlternateDataStream(dataStream, FileMode.Open).OpenRead(), contentType ?? Mime.GetType(dataStream));
                 }
 
                 if (dataStream == null && file.Exists)
                 {
-                    return PhysicalFile(file.FullName, Mime.GetType(file.Name));
+                    return PhysicalFile(file.FullName, Mime.GetType(file.Name), enableRangeProcessing: true);
                 }
             }
             catch (Exception ex)

@@ -1,181 +1,162 @@
-(function () {
-    const baseaddr = window.location.origin + "/api/";
+import { createViewer } from "./Viewer.js";
 
-    let pageName;     // The name of the page the gallery is installed on (read from the active breadcrumb item)
-    let breadcrumbEl; // Breadcrumb elements before the active item, kept for re-render on navigation
-    let currentDir = null; // Tracks the active directory; stale async callbacks check this before acting
-    let dataLoaded = false;
+const gallery = document.querySelector("#gallery");
+const folders = document.querySelector("#folders");
+const progress = document.querySelector("#progress");
+const progressBar = progress.querySelector(".progress-bar");
+const breadcrumb = document.querySelector(".breadcrumb");
+const pageName = breadcrumb.querySelector(".active").textContent;
+const breadcrumbPrefix = [...breadcrumb.children].filter(item => !item.classList.contains("active"));
+let directoryRequest;
+let viewer;
 
-    /* When the page is loaded, kick off the gallery loading process */
-    $(function () {
-        pageName = $(".breadcrumb .active").text();
-        breadcrumbEl = $(".breadcrumb").children(":not(.active)");
+window.addEventListener("hashchange", loadDirectory);
+loadDirectory();
 
-        load(window.location.hash.substring(1));
-    });
+async function loadDirectory() {
+    directoryRequest?.abort();
+    viewer?.destroy();
+    viewer = null;
+    const request = new AbortController();
+    directoryRequest = request;
+    const { signal } = request;
+    const segments = location.hash.slice(1).split("/").filter(Boolean);
+    const dir = "/" + (segments.length ? segments.join("/") + "/" : "");
+    renderBreadcrumb(segments);
+    gallery.replaceChildren();
+    folders.replaceChildren();
+    progress.style.display = "none";
+    window.scrollTo(0, 0);
 
-    /* When the hash changes, reload the gallery for the new path */
-    $(window).on("hashchange", function () {
-        load(window.location.hash.substring(1));
-    });
-
-    /* Load the image index and display images on page */
-    function load(dir) {
-        if (dir.length === 0) { dir = "/"; }
-
-        currentDir = dir;
-        dataLoaded = false;
-
-        $("#gallery").empty();
-        $("#folders").empty();
-        $(document).scrollTop(0);
-
-        setTimeout(function () { getProgress(dir); }, 1000);
-        getDirIndex(dir);
-        generateBreadcrumb();
-    }
-
-    /* Handles the display of the loading progress bar */
-    function getProgress(dir) {
-        // Bail out if we've navigated away or the index already loaded
-        if (dir !== currentDir || dataLoaded) { $("#progress").hide(); return; }
-
-        $("#progress").show();
-        $.getJSON(baseaddr + "dir/status" + dir, function (data) {
-            const percent = data.percent;
-            $(".progress-bar")
-                .text("Creating thumbnails - " + percent + "%")
-                .attr("aria-valuenow", percent)
-                .css("width", percent + "%");
-            $("#progress-status").text(data.currentWork || "");
-
-            if (percent === 100) {
-                $("#progress").hide();
-                if (!dataLoaded) { getDirIndex(dir); }
-            } else {
-                setTimeout(function () { getProgress(dir); }, 1000);
+    const progressTimer = setTimeout(() => showProgress(dir, signal), 1000);
+    try {
+        // A previous visit may still have thumbnail generation in progress.
+        let response;
+        do {
+            // Older, seven-day-cached responses predate the image dimensions used by PhotoSwipe.
+            response = await fetch("/api/dir" + dir + "?dimensions=1", { signal });
+            if (response.status === 409) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
-        }).fail(function () {
-            // Any error (404, 500, etc.) — stop polling; getDirIndex will handle recovery
-            $("#progress").hide();
-        });
-    }
-
-    /* Escape a string for safe insertion into HTML */
-    function escapeHtml(str) {
-        return str
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
-    }
-
-    /* Load the dir index. The request stays open until all thumbnails are generated,
-       so the progress bar runs async while this is waiting. */
-    function getDirIndex(dir) {
-        $.getJSON(baseaddr + "dir" + dir, function (data) {
-            // Ignore stale responses from a previous navigation
-            if (dir !== currentDir || data == null) { return; }
-            dataLoaded = true;
-
-            const folderHtml = [];
-            const galleryHtml = [];
-
-            for (const key in data) {
-                const title = escapeHtml(data[key].title);
-                if (data[key].type === "dir") {
-                    folderHtml.push(
-                        "<div class='gallery-folder'>" +
-                        "<a href=\"#" + dir + encodeURIComponent(data[key].title) + "/\">" +
-                        "<div><div><img src=\"" + baseaddr + "media/icon/" + encodeURI(key) + "\"></div></div>" +
-                        "<span>" + title + "</span>" +
-                        "</a></div>"
-                    );
-                } else if (data[key].type === "video") {
-                    galleryHtml.push(
-                        "<div class='gallery-item'>" +
-                        "<a href=\"" + baseaddr + "media/file" + dir + encodeURI(key) + "\" data-fancybox='gallery' data-thumb=\"" + baseaddr + "media/icon" + dir + encodeURIComponent(key) + "\">" +
-                        "<video autoplay loop muted playsinline>" +
-                        "<source src=\"" + baseaddr + "media/thumb" + dir + encodeURI(key) + "\" type='video/mp4'>" +
-                        "</video></a>" +
-                        "<div class='gallery-video'><div>" + title + "</div></div>" +
-                        "</div>"
-                    );
-                } else if (data[key].type === "image") {
-                    galleryHtml.push(
-                        "<div class='gallery-item'>" +
-                        "<a href=\"" + baseaddr + "media/file" + dir + encodeURI(key) + "\" data-fancybox='gallery'>" +
-                        "<img src=\"" + baseaddr + "media/thumb" + dir + encodeURI(key) + "\" alt=\"" + title + "\" />" +
-                        "</a>" +
-                        "<div class='gallery-image'><div>" + title + "</div></div>" +
-                        "</div>"
-                    );
-                }
+        } while (response.status === 409 && !signal.aborted);
+        if (signal.aborted) return;
+        if (!response.ok) throw new Error("Directory request returned " + response.status);
+        const entries = await response.json();
+        if (signal.aborted) return;
+        for (const [key, item] of Object.entries(entries)) {
+            if (item.type === "dir") {
+                folders.append(folderCard(dir, key, item.title));
+            } else if (item.type === "image" || item.type === "video") {
+                gallery.append(mediaCard(dir, key, item));
             }
-
-            $("#folders").append(folderHtml.join(""));
-            $("#gallery").append(galleryHtml.join(""));
-
-            // Tear down any previous Fancybox binding before re-binding for the new directory
-            Fancybox.unbind("[data-fancybox='gallery']");
-            Fancybox.bind("[data-fancybox='gallery']", {
-                Carousel: {
-                    Thumbs: {
-                        showOnStart: false,
-                    },
-                    formatCaption: function (carouselRef, slide) {
-                        // Title from the gallery overlay div adjacent to the trigger <a>
-                        const titleText = slide.triggerEl?.nextElementSibling?.textContent || "";
-                        const title = titleText ? "<strong>" + escapeHtml(titleText) + "</strong><br />" : "";
-                        const captionId = "fancybox-caption-" + slide.index;
-
-                        // Async-load IPTC caption from per-file metadata ADS
-                        $.getJSON(slide.src.replace("/media/file/", "/media/meta/"), function (data) {
-                            const el = document.getElementById(captionId);
-                            if (el && data.Caption) {
-                                el.innerHTML = escapeHtml(data.Caption) + "<br />";
-                            }
-                        }).fail(function (jqXHR, textStatus, errorThrown) {
-                            console.log(textStatus, errorThrown);
-                        });
-
-                        return title +
-                            "<span id='" + captionId + "'></span>" +
-                            "<a href='" + slide.src + "'>Download</a>";
-                    }
-                },
-                hash: false
-            });
-        }).fail(function (jqXHR) {
-            if (jqXHR.status === 409) {
-                // Another generation is already in progress for this dir — retry after a short delay
-                setTimeout(function () { getDirIndex(dir); }, 1000);
-            } else {
-                console.log("Failed to load directory index:", jqXHR.status);
-            }
-        });
+        }
+        viewer = createViewer(gallery);
+    } catch (error) {
+        if (!signal.aborted) console.error("Failed to load directory", error);
+    } finally {
+        clearTimeout(progressTimer);
+        if (!signal.aborted) progress.style.display = "none";
+        request.abort();
     }
+}
 
-    /* Breadcrumb generation — customize the initial breadcrumb in Default.htm to match your site */
-    function generateBreadcrumb() {
-        $(".breadcrumb").html(breadcrumbEl);
+async function showProgress(dir, signal) {
+    if (signal.aborted) return;
+    try {
+        const response = await fetch("/api/dir/status" + dir, { signal });
+        if (!response.ok) return;
+        const { percent, currentWork } = await response.json();
+        if (signal.aborted) return;
+        if (percent === 100) {
+            progress.style.display = "none";
+            return;
+        }
+        progress.style.display = "flex";
+        progressBar.textContent = "Creating thumbnails - " + percent + "%";
+        progressBar.setAttribute("aria-valuenow", percent);
+        progressBar.style.width = percent + "%";
+        document.querySelector("#progress-status").textContent = currentWork || "";
+        setTimeout(() => showProgress(dir, signal), 1000);
+    } catch (error) {
+        if (!signal.aborted) console.error("Failed to load thumbnail progress", error);
+    }
+}
 
-        if (window.location.hash.length > 1) {
-            $(".breadcrumb").append("<li><a href='" + window.location.pathname + "'>" + pageName + "</a>&nbsp;<span class='divider'>/</span></li>");
+function folderCard(dir, key, title) {
+    const card = document.createElement("div");
+    card.className = "gallery-folder";
+    const link = document.createElement("a");
+    link.href = "#" + dir + encodeURIComponent(title) + "/";
+    const icon = document.createElement("img");
+    icon.alt = "";
+    icon.src = "/api/media/icon/" + key.split("/").map(encodeURIComponent).join("/");
+    const face = document.createElement("div");
+    face.append(icon);
+    const folder = document.createElement("div");
+    folder.append(face);
+    const label = document.createElement("span");
+    label.textContent = title;
+    link.append(folder, label);
+    card.append(link);
+    return card;
+}
+
+function mediaCard(dir, key, item) {
+    const path = dir + encodeURIComponent(key);
+    const card = document.createElement("div");
+    card.className = "gallery-item";
+    const link = document.createElement("a");
+    link.href = "/api/media/file" + path;
+    link.dataset.title = item.title;
+    link.dataset.meta = "/api/media/meta" + path;
+    link.setAttribute("aria-label", item.title);
+    let preview;
+    if (item.type === "video") {
+        link.dataset.pswpType = "video";
+        link.dataset.icon = "/api/media/icon" + path;
+        preview = document.createElement("video");
+        preview.muted = true;
+        preview.loop = true;
+        preview.autoplay = true;
+        preview.playsInline = true;
+        preview.poster = link.dataset.icon;
+    } else {
+        if (item.width && item.height) {
+            link.dataset.pswpWidth = item.width;
+            link.dataset.pswpHeight = item.height;
+        }
+        preview = document.createElement("img");
+        preview.alt = item.title;
+    }
+    preview.src = "/api/media/thumb" + path;
+    link.append(preview);
+
+    const overlay = document.createElement("div");
+    overlay.className = "gallery-" + item.type;
+    const label = document.createElement("div");
+    label.textContent = item.title;
+    overlay.append(label);
+    card.append(link, overlay);
+    return card;
+}
+
+function renderBreadcrumb(segments) {
+    breadcrumb.replaceChildren(...breadcrumbPrefix);
+    const titles = [pageName, ...segments.map(segment => decodeURIComponent(segment))];
+    for (const [index, title] of titles.entries()) {
+        const item = document.createElement("li");
+        if (index === titles.length - 1) {
+            item.className = "active";
+            item.textContent = title;
         } else {
-            $(".breadcrumb").append("<li class='active'>" + pageName + "</li>");
+            const link = document.createElement("a");
+            link.href = index ? "#/" + segments.slice(0, index).join("/") + "/" : location.pathname;
+            link.textContent = title;
+            const divider = document.createElement("span");
+            divider.className = "divider";
+            divider.textContent = "/";
+            item.append(link, "\u00a0", divider);
         }
-
-        const path = window.location.hash.substring(1).split("/");
-        let pathCompile = "/";
-        for (let i = 0; i < path.length; i++) {
-            if (path[i].length === 0) { continue; }
-            pathCompile += path[i] + "/";
-            if (i === path.length - 2) {
-                $(".breadcrumb").append("<li class='active'>" + escapeHtml(decodeURIComponent(path[i])) + "</li>");
-            } else {
-                $(".breadcrumb").append("<li><a href='" + window.location.pathname + "#" + pathCompile + "'>" + escapeHtml(decodeURIComponent(path[i])) + "</a>&nbsp;<span class='divider'>/</span></li>");
-            }
-        }
+        breadcrumb.append(item);
     }
-})();
+}

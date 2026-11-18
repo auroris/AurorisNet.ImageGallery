@@ -1,156 +1,137 @@
 # ImageGallery
 
-An ASP.NET Core web application that serves a self-indexing photo and video gallery from a local directory or network share. Photo technicians populate EXIF/IPTC metadata and drop files onto the share; the app generates thumbnails automatically on first request and caches everything as NTFS Alternate Data Streams (ADS) on the source files — no separate database or sidecar files required.
+A web gallery for a folder of photos and videos, which keeps each file's thumbnail, icon and caption inside the file itself.
 
-## Features
+![MIT license](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/license-mit.svg)
+![.NET 10](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/dotnet-10.svg)
+![Windows](https://raw.githubusercontent.com/auroris/AurorisNet.Build/main/badges/windows.svg)
 
-- **Zero-copy thumbnails** — thumbnails, icons, and per-file metadata are stored as NTFS ADS on the original files, leaving the source tree clean
-- **On-demand generation** — thumbnails are generated the first time a directory is requested; subsequent requests are served from cache
-- **Image support** — crop-centred thumbnails (landscape 4:3 or portrait 8:9), static PNG icons via ImageMagick
-- **Video support** — short animated MP4 clips as thumbnails, static PNG frame as icon, via FFmpeg
-- **IPTC metadata** — reads Object Name (title) and Caption/Abstract from EXIF/IPTC tags; falls back to filename
-- **Live progress** — frontend polls `/api/dir/status` while generation is in progress
-- **Swagger UI** — full OpenAPI documentation available at `/swagger` in Development
+ImageGallery is an ASP.NET Core 10 application that serves a folder, or a network share, as a gallery in the browser. People manage the folder with their own tools: they copy files in, rename them, move them and delete them. The gallery follows, because it stores what it generates in NTFS alternate data streams on the media files:
 
-## Requirements
+- **Each file carries its own cache.** The thumbnail, the icon and the caption are named streams of the photo or video, such as `photo.jpg:thumbnail.jpg`. A file that is renamed or moved on NTFS keeps them, and a file that is deleted takes them with it. There is no database to keep in step with the folder.
+- **Thumbnails appear on the first visit.** Opening a folder in the gallery generates what its new files lack, and shows progress while it works. Later visits read the streams.
+- **Photos and videos.** A photo gets a cropped thumbnail and a small icon, made with ImageMagick. A video gets a short silent clip as its thumbnail and a still frame as its icon, made with FFmpeg.
+- **Titles and captions from the files.** The gallery reads the IPTC **Object Name** as the title and **Caption/Abstract** as the caption, and uses the file name when a file has no title.
 
-| Requirement | Version |
+## Install
+
+Download `ImageGallery-<version>-win-x64.zip` from the [releases](https://github.com/auroris/AurorisNet.ImageGallery/releases) and extract it. The server needs:
+
+- Windows, with the gallery folder on an NTFS volume;
+- the .NET 10 ASP.NET Core runtime, or the .NET 10 Hosting Bundle under IIS;
+- an account that can write to the gallery folder, because the streams and each folder's index are written there.
+
+Set `GalleryPath` in `appsettings.json` to the folder to show, then start `ImageGallery.exe`, or point an IIS site at the extracted folder. The gallery is the site's `Default.htm`.
+
+The gallery has no sign-in of its own. Everyone who can reach the site can open every file under `GalleryPath`, so put it behind IIS authentication or a network boundary when the folder is private.
+
+## Settings
+
+The settings are top-level keys of `appsettings.json`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `GalleryPath` | `DemoGallery` | The folder the gallery shows. A relative path starts at the application folder. A UNC path such as `\\server\share\Photos` works. |
+| `TempDir` | `temp` | The working folder for ImageMagick and FFmpeg. A relative path starts at the application folder. The application creates it and stops at startup if it cannot write there. |
+| `Images` | `["jpg", "png"]` | The file extensions, without the dot, shown as photos. |
+| `Videos` | `["mp4"]` | The file extensions, without the dot, shown as videos. |
+| `Thumbnail:width` | `260` | The thumbnail's width in pixels. Its height follows from the crop, described under [How it works](#how-it-works). `Thumbnail:height` is read and not used. |
+| `Icon:width`, `Icon:height` | `100`, `100` | A photo's icon fits within these dimensions. A video frame uses the configured width and keeps its aspect ratio. |
+| `Thumbnail:name`, `Icon:name` | `thumbnail`, `icon` | The names of the two streams, before the extension. |
+| `MetaFile` | `_meta.json` | The name of each file's caption stream and of each folder's index file. |
+| `MediaClipStart` | `10` | The second of a video at which its thumbnail clip starts. A video shorter than the clip's end starts at 0. |
+| `MediaClipLength` | `15` | The length of the thumbnail clip in seconds. |
+| `RegenerateThumbnails` | `false` | `true` generates every thumbnail and icon again each time a folder is opened. Set it back to `false` afterwards. |
+
+The application logs to the console and writes `application.log` beside the executable. At 1 MiB it rolls the file to `application1.log` and keeps one backup. The `Logging` section controls log levels.
+
+## How it works
+
+1. The browser asks for a folder with `GET /api/dir/{path}`.
+2. The application compares the folder's files with the folder's index, `_meta.json`. Each file the index does not list is new.
+3. For each new photo it writes two streams on the file: a thumbnail, cropped around the centre to 4:3 or to 8:9, whichever is nearer the photo's shape, and an icon. For each new video it writes a thumbnail clip encoded as H.264 and a PNG icon of a frame.
+4. It writes the file's caption to the file's `_meta.json` stream. The folder's `_meta.json` records titles, media types and original photo dimensions. On the first visit after upgrading, the gallery reads image headers to fill in missing dimensions in an older index.
+5. The gallery shows each subfolder with the icon of the first photo or video found inside it. Folders whose names start with `$` are left out.
+
+While a folder is being generated, a second request for it answers `409 Conflict`. The page polls `GET /api/dir/status/{path}` each second, shows the percentage and the last finished file, and asks again.
+
+Streams look like this in PowerShell:
+
+```powershell
+Get-Item .\photo.jpg -Stream *      # :$DATA, thumbnail.jpg, icon.jpg, _meta.json
+Get-Item .\clip.mp4 -Stream *       # :$DATA, thumbnail.mp4, icon.png, _meta.json
+```
+
+### What to know about the streams
+
+- **They exist on NTFS only.** Copying a file to a FAT or exFAT drive, into a ZIP, or through most cloud-sync tools drops them. The gallery generates them again the next time the folder is opened.
+- **A new file is recognised by its name.** Replacing a photo with another of the same name keeps the old thumbnail. Set `RegenerateThumbnails`, or remove the streams as shown under [Developing](#developing).
+- **Progress is tracked per folder name.** Two folders with the same name in different places share one progress record, so opening one while the other is generating answers `409` until it finishes.
+- **Responses are cached for a week.** The folder index, thumbnails and icons are sent with a seven-day cache header, so a browser may show a folder as it was until its cache is refreshed.
+
+## API
+
+Swagger UI at `/swagger` lists the full API when the application runs in the Development environment.
+
+| Route | Returns |
 |---|---|
-| .NET | 10.0 |
-| Windows | Required (NTFS ADS, Memory-Mapped Files) |
-| ffmpeg / ffprobe | Bundled in `ffmpeg\` directory |
+| `GET /api/dir` and `GET /api/dir/{path}` | The index of the gallery root or of a folder, after generating what is missing. `404` for a path outside the gallery, `409` while the folder is generating. |
+| `GET /api/dir/status` and `GET /api/dir/status/{path}` | `{ "percent": 0-100, "currentWork": "<last finished file>" }` for the folder. |
+| `GET /api/media/thumb/{path}` | The file's thumbnail stream. |
+| `GET /api/media/icon/{path}` | The file's icon stream. |
+| `GET /api/media/meta/{path}` | The file's caption: `{ "Caption": "..." }`. |
+| `GET /api/media/file/{path}` | The file itself. |
 
-## Getting Started
-
-### 1. Configure `appsettings.json`
+The thumbnail, icon and caption routes answer `404` for a file whose stream has not been written yet. The index is an object keyed by file name, or by the path of a subfolder's first media file:
 
 ```json
 {
-  "GalleryPath": "\\\\server\\share\\Photos",
-  "TempDir":     "C:\\Temp\\ImageGallery",
-  "LogDir":      "C:\\Logs\\ImageGallery"
+  "holiday.jpg": { "type": "image", "title": "Sunset at the beach", "updated": "2024-08-15T18:30:00", "width": 1920, "height": 1080 },
+  "clip.mp4": { "type": "video", "title": "clip.mp4", "updated": "2024-08-16T09:00:00" },
+  "Archive/first.jpg": { "type": "dir", "title": "Archive", "updated": "2024-01-01T00:00:00" }
 }
 ```
 
-| Key | Default | Description |
-|---|---|---|
-| `GalleryPath` | `DemoGallery` | Root directory of the photo share. Relative paths resolve from the app base directory. Falls back to the bundled `DemoGallery` if the path does not exist. |
-| `TempDir` | `temp` | Working directory for FFmpeg and ImageMagick during thumbnail generation. |
-| `LogDir` | `.` | Directory for log4net output. |
-| `MetaFile` | `_meta.json` | ADS stream name used for per-file metadata and the per-directory index. |
-| `RegenerateThumbnails` | `false` | Set to `true` to force regeneration of all thumbnails and icons on next request. |
-| `Images` | `["jpg","png"]` | File extensions (without dot) treated as images. |
-| `Videos` | `["mp4"]` | File extensions (without dot) treated as videos. |
-| `MediaClipStart` | `10` | Seconds into the video where the thumbnail clip begins. |
-| `MediaClipLength` | `15` | Duration in seconds of the thumbnail clip. |
-| `Thumbnail:width` / `height` | `260` / `260` | Pixel dimensions of generated thumbnail images. |
-| `Icon:width` / `height` | `100` / `100` | Pixel dimensions of generated icon images. |
+## Supported versions
 
-### 2. Run
+| Component | Version |
+|---|---|
+| .NET | 10 |
+| Operating system | Windows x64 |
+| File system of the gallery folder | NTFS |
+| Browser | A modern browser with JavaScript enabled. The gallery serves its scripts and styles locally. Video playback depends on the browser's support for the original file. |
 
-```bash
+## Developing
+
+You need the .NET 10 SDK on Windows.
+
+```powershell
+dotnet build ImageGallery -c Release
 dotnet run --project ImageGallery
+# The release build, as the workflows make it
+dotnet publish ImageGallery/ImageGallery.csproj -c Release -r win-x64 --self-contained false -o artifacts/publish
 ```
 
-Navigate to `http://localhost:5000` (or the configured port). The gallery root is served from `Default.htm`.
+`dotnet run` listens on `http://localhost:5000`. Point `GalleryPath` at a folder of photos first; the default, `DemoGallery`, is a folder beside the application that the repository does not include.
 
-In Development, the Swagger UI is available at `http://localhost:5000/swagger`.
+The repository has no test project. The workflows build and publish the application, and that build is the only check.
 
-## Project Structure
+`CleanImageGallery.ps1` resets a gallery folder. Run it in that folder: it deletes every `_meta.json` file below it and **every alternate data stream of every file below it**, including streams other software wrote.
 
-```
-ImageGallery/
-├── App/
-│   ├── Configuration.cs       # Singleton config accessor (reads appsettings.json)
-│   ├── Media.cs               # Crop math, dimension helpers, IPTC metadata reading
-│   ├── MediaResult.cs         # DTO returned by image/video workers
-│   └── Mime.cs                # Extension → MIME type lookup
-├── Controllers/
-│   ├── DirectoryInformationController.cs  # GET /api/dir, GET /api/dir/status
-│   └── MediaController.cs                 # GET /api/media/{thumb,icon,meta,file}
-├── Workers/
-│   ├── DirectoryWorker.cs     # Orchestrates scanning and processing for a directory
-│   ├── ImageWorker.cs         # Thumbnail/icon generation via ImageMagick
-│   ├── VideoWorker.cs         # Thumbnail/icon generation via FFmpeg
-│   └── ProgressWorker.cs      # Tracks generation progress via Memory-Mapped File
-├── wwwroot/
-│   ├── Default.htm            # Single-page gallery frontend
-│   ├── App.js                 # Gallery logic (jQuery + Fancybox 6)
-│   └── style.css              # Gallery styles
-├── ffmpeg/
-│   ├── ffmpeg.exe             # Bundled FFmpeg binary
-│   └── ffprobe.exe            # Bundled FFprobe binary
-├── DemoGallery/               # Sample images used as fallback gallery in Development
-├── appsettings.json
-└── log4net.xml                # log4net configuration
-```
-
-## API Reference
-
-Full interactive documentation is available at `/swagger` when running in Development. A brief summary:
-
-| Method | Route | Description |
-|---|---|---|
-| `GET` | `/api/dir` | Returns the media index for the gallery root |
-| `GET` | `/api/dir/{path}` | Returns the media index for a subdirectory; generates missing thumbnails |
-| `GET` | `/api/dir/status` | Returns generation progress (0–100) for the gallery root |
-| `GET` | `/api/dir/status/{path}` | Returns generation progress (0–100) for a subdirectory |
-| `GET` | `/api/media/thumb/{path}` | Serves the animated MP4 thumbnail clip from the file's ADS |
-| `GET` | `/api/media/icon/{path}` | Serves the static PNG icon from the file's ADS |
-| `GET` | `/api/media/meta/{path}` | Returns per-file JSON metadata `{ "Caption": "..." }` |
-| `GET` | `/api/media/file/{path}` | Serves the original source file |
-
-### Directory index response
-
-`GET /api/dir/{path}` returns a JSON object keyed by filename (or subdirectory representative path):
-
-```json
-{
-  "2024/holiday.jpg": {
-    "type":    "image",
-    "title":   "Sunset at the beach",
-    "updated": "2024-08-15T18:30:00"
-  },
-  "2024/clip.mp4": {
-    "type":    "video",
-    "title":   "Diving footage",
-    "updated": "2024-08-16T09:00:00"
-  },
-  "Archive/first-file.jpg": {
-    "type":    "dir",
-    "title":   "Archive",
-    "updated": "2024-01-01T00:00:00"
-  }
-}
-```
-
-Responds `409 Conflict` if thumbnail generation is already in progress for the directory; the frontend retries automatically.
-
-## How Thumbnails Work
-
-1. The first `GET /api/dir/{path}` for a directory triggers `DirectoryWorker.ProcessAsync`.
-2. Files new since the last scan are queued for `ImageWorker` or `VideoWorker`.
-3. Workers write output into named **NTFS Alternate Data Streams** on the source file:
-   - `thumbnail` stream — animated MP4 clip (video) or cropped JPEG (image)
-   - `icon` stream — static PNG frame at icon dimensions
-   - `_meta.json` stream — `{ "Caption": "..." }` from IPTC metadata
-4. A per-directory `_meta.json` index file is written to the directory on completion.
-5. Subsequent requests read directly from ADS; no regeneration occurs unless `RegenerateThumbnails: true`.
-
-## Dependencies
-
-| Package | Purpose |
+| Folder | Contents |
 |---|---|
-| `Magick.NET-Q16-x64` 14.x | Image thumbnail/icon generation |
-| `Xabe.FFmpeg` 6.x | Video thumbnail/icon generation |
-| `MetadataExtractor` 2.x | EXIF/IPTC metadata reading |
-| `Trinet.Core.IO.Ntfs` 4.x | NTFS Alternate Data Stream access |
-| `log4net` 3.x | Logging |
-| `Swashbuckle.AspNetCore` 10.x | OpenAPI / Swagger documentation |
+| `ImageGallery/App` | Settings, crop arithmetic and metadata reading. |
+| `ImageGallery/Controllers` | The `/api/dir` and `/api/media` routes. |
+| `ImageGallery/Workers` | Folder scanning, photo and video generation, and the progress record, a memory-mapped file named for the folder. |
+| `ImageGallery/wwwroot` | The gallery page and its bundled PhotoSwipe viewer. |
+| `ImageGallery/ffmpeg` | The pinned Windows x64 FFmpeg archive. The build extracts `ffmpeg.exe`, `ffprobe.exe` and their license into the output's `ffmpeg` directory. |
 
-## Known Limitations
+## Releases
 
-- **Windows only** — NTFS ADS and Memory-Mapped File progress tracking are Windows-specific.
-- **Same-machine progress** — the `ProgressWorker` MMF is only accessible from the same machine as the server.
-- **Path security** — the gallery root check uses `StartsWith` on the normalized path; UNC paths and symlinks should be tested in your environment.
-- **Concurrent directory requests** — a second request for a directory already being processed returns `409`; the frontend polls and retries.
+ImageGallery follows Magick.NET, which reads and writes every photo and carries ImageMagick's security fixes. Dependabot checks NuGet each day and gives Magick.NET a pull request of its own. `ci.yml` builds it, merges it and starts `release.yml`, which publishes `ImageGallery-<version>-win-x64.zip` and its `.sha256` on a GitHub release. Versions are `MAJOR.MINOR.PATCH`. The application ships no NuGet package.
+
+No release exists yet: start the first by hand, by running `release.yml` with a version such as `1.0.0`. The [release guide](https://github.com/auroris/AurorisNet.Build/blob/main/docs/releasing.md) describes the workflows.
+
+## License
+
+ImageGallery is under the [MIT license](LICENSE). The bundled FFmpeg executables are distributed under the GPL. The [third-party notices](THIRD-PARTY-NOTICES.md) list the licenses for the components in a release.

@@ -1,5 +1,5 @@
 using ImageMagick;
-using log4net;
+using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
 using Trinet.Core.IO.Ntfs;
@@ -22,12 +22,8 @@ namespace ImageGallery.Workers
 	///   </description></item>
 	/// </list>
 	/// </summary>
-	public class ImageWorker
+	public class ImageWorker(ILogger<ImageWorker> logger)
 	{
-		private static readonly ILog Log = LogManager.GetLogger(typeof(ImageWorker));
-
-		public ImageWorker() { }
-
 		/// <summary>
 		/// Processes an image file asynchronously, generating either a cropped thumbnail or a
 		/// scaled icon depending on <paramref name="type"/>, and writing it to the file's NTFS
@@ -44,7 +40,7 @@ namespace ImageGallery.Workers
 			result.Updated = file.LastWriteTime;
 			result.Duration = 0;
 
-			Dictionary<string, string> metaDic = Media.GetMeta(file);
+			Dictionary<string, string> metaDic = Media.GetMeta(file, logger);
 			result.Title = metaDic.ContainsKey("Object Name") ? metaDic["Object Name"] : file.Name;
 			result.Caption = metaDic.ContainsKey("Caption/Abstract") ? metaDic["Caption/Abstract"] : result.Caption;
 			result.Type = type;
@@ -57,8 +53,7 @@ namespace ImageGallery.Workers
 					try
 					{
 						using MagickImage image = new MagickImage(file.FullName);
-						result.Width = (int)image.Width;
-						result.Height = (int)image.Height;
+						(result.Width, result.Height) = GetDisplayDimensions(image);
 
 						// Compute new dimensions
 						Media.Dimension imageCrop = Media.GetCroppedThumbnailDimensions((int)image.Width, (int)image.Height, true);
@@ -81,19 +76,19 @@ namespace ImageGallery.Workers
 					}
 					catch (IOException ex) when (IsDiskFull(ex))
 					{
-						Log.Error($"Disk full while writing thumbnail for image: {file.FullName} " +
-							$"(target volume: {Path.GetPathRoot(file.FullName)})", ex);
+						logger.LogError(ex, "Disk full while writing thumbnail for image {Path} on volume {Volume}",
+							file.FullName, Path.GetPathRoot(file.FullName));
 						throw;
 					}
 					catch (IOException ex)
 					{
-						Log.Error($"I/O error writing thumbnail ADS for image: {file.FullName} — " +
-							"verify the volume supports NTFS alternate data streams and the app has write permission", ex);
+						logger.LogError(ex, "I/O error writing thumbnail ADS for image {Path}. Verify the volume " +
+							"supports NTFS alternate data streams and the app has write permission", file.FullName);
 						throw;
 					}
 					catch (Exception ex)
 					{
-						Log.Error($"Failed to generate thumbnail for image: {file.FullName}", ex);
+						logger.LogError(ex, "Failed to generate thumbnail for image {Path}", file.FullName);
 						throw;
 					}
 				});
@@ -106,8 +101,7 @@ namespace ImageGallery.Workers
 					try
 					{
 						using MagickImage image = new MagickImage(file.FullName);
-						result.Width = (int)image.Width;
-						result.Height = (int)image.Height;
+						(result.Width, result.Height) = GetDisplayDimensions(image);
 
 						// Resize image to icon
 						MagickGeometry iconSize = new MagickGeometry((uint)Configuration.Get.Image.Icon.Width, (uint)Configuration.Get.Image.Icon.Height);
@@ -124,25 +118,34 @@ namespace ImageGallery.Workers
 					}
 					catch (IOException ex) when (IsDiskFull(ex))
 					{
-						Log.Error($"Disk full while writing icon for image: {file.FullName} " +
-							$"(target volume: {Path.GetPathRoot(file.FullName)})", ex);
+						logger.LogError(ex, "Disk full while writing icon for image {Path} on volume {Volume}",
+							file.FullName, Path.GetPathRoot(file.FullName));
 						throw;
 					}
 					catch (IOException ex)
 					{
-						Log.Error($"I/O error writing icon ADS for image: {file.FullName} — " +
-							"verify the volume supports NTFS alternate data streams and the app has write permission", ex);
+						logger.LogError(ex, "I/O error writing icon ADS for image {Path}. Verify the volume " +
+							"supports NTFS alternate data streams and the app has write permission", file.FullName);
 						throw;
 					}
 					catch (Exception ex)
 					{
-						Log.Error($"Failed to generate icon for image: {file.FullName}", ex);
+						logger.LogError(ex, "Failed to generate icon for image {Path}", file.FullName);
 						throw;
 					}
 				});
 			}
 
 			return result;
+		}
+
+		internal static (int Width, int Height) GetDisplayDimensions(MagickImage image)
+		{
+			// Browsers apply EXIF orientation to the original; quarter turns swap its axes.
+			return image.Orientation is Orientation.LeftTop or Orientation.RightTop
+				or Orientation.RightBottom or Orientation.LeftBottom
+				? ((int)image.Height, (int)image.Width)
+				: ((int)image.Width, (int)image.Height);
 		}
 
 		/// <summary>

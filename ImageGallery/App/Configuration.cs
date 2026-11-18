@@ -29,7 +29,6 @@ namespace ImageGallery
             RegenerateThumbnails = Program.AppConfiguration.GetValue<bool>("RegenerateThumbnails");
             MetaFile = Program.AppConfiguration.GetValue<String>("MetaFile");
             TempDir = ResolvePath(Program.AppConfiguration.GetValue<String>("TempDir"));
-            LogDir = ResolvePath(Program.AppConfiguration.GetValue<String>("LogDir"));
 
             string galleryPath = ResolvePath(Program.AppConfiguration.GetValue<String>("GalleryPath"));
             if (!Directory.Exists(galleryPath))
@@ -88,8 +87,6 @@ namespace ImageGallery
         public VideoType Video;
         /// <summary>Absolute path to the directory used for temporary files during thumbnail generation.</summary>
         public string TempDir;
-        /// <summary>Absolute path to the directory used by log4net for log output.</summary>
-        public string LogDir;
 
         public class ImageType
         {

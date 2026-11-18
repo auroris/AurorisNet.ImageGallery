@@ -1,9 +1,11 @@
-using log4net;
+using ImageMagick;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Trinet.Core.IO.Ntfs;
 
@@ -22,25 +24,18 @@ namespace ImageGallery.Workers
     /// <c>/api/dir/status</c> while generation is in progress.
     /// </para>
     /// </summary>
-    public class DirectoryWorker
+    public class DirectoryWorker(ILogger<DirectoryWorker> logger, ImageWorker imageWorker, VideoWorker videoWorker)
     {
-        private static readonly ILog Log = LogManager.GetLogger(typeof(DirectoryWorker));
-        private readonly DirectoryInfo workDirectory;
-
-		public DirectoryWorker(DirectoryInfo path)
-        {
-			workDirectory = path;
-		}
-
 		/// <summary>
 		/// Scans the directory, generates missing thumbnails and icons, and returns the updated
 		/// media index. Returns <c>null</c> if generation is already in progress for this directory.
 		/// </summary>
+		/// <param name="workDirectory">The gallery directory to scan.</param>
 		/// <param name="overwrite">
 		///   When <c>true</c>, regenerates thumbnails and icons for all files even if they already
 		///   exist. Controlled by the <c>RegenerateThumbnails</c> appsetting.
 		/// </param>
-		public async Task<SortedDictionary<string, DirItem>> ProcessAsync(bool overwrite)
+		public async Task<SortedDictionary<string, DirItem>> ProcessAsync(DirectoryInfo workDirectory, bool overwrite)
 		{
 			bool dirty = false;
 			ProgressWorker progress = new ProgressWorker(workDirectory);
@@ -96,7 +91,7 @@ namespace ImageGallery.Workers
 			// List files in the dir
 			foreach (FileInfo file in workDirectory.GetFiles())
 			{
-				if (!mediaListOld.ContainsKey(file.Name) // If the old media list doesn't contain this file (because it's new), or
+				if (!mediaListOld.TryGetValue(file.Name, out DirItem cachedItem) // If the old media list doesn't contain this file (because it's new), or
 					|| overwrite) // We're instructed to re-generate all data
 				{
 					String ext = file.Extension.ToLower().Trim('.');
@@ -108,8 +103,22 @@ namespace ImageGallery.Workers
 				}
 				else
 				{
-					// No updates, simply copy the old data to the new
-					mediaList.Add(file.Name, mediaListOld[file.Name]);
+					// Older indexes have no source dimensions. Read just the image header.
+					if (cachedItem.Type == "image" && (cachedItem.Width <= 0 || cachedItem.Height <= 0))
+					{
+						try
+						{
+							using MagickImage image = new MagickImage();
+							image.Ping(file);
+							(cachedItem.Width, cachedItem.Height) = ImageWorker.GetDisplayDimensions(image);
+							dirty = true;
+						}
+						catch (Exception ex) when (ex is MagickException or IOException or UnauthorizedAccessException)
+						{
+							logger.LogWarning(ex, "Unable to read image dimensions for {Path}", file.FullName);
+						}
+					}
+					mediaList.Add(file.Name, cachedItem);
 				}
 			}
 
@@ -119,13 +128,11 @@ namespace ImageGallery.Workers
 				String ext = file.Extension.ToLower().Trim('.');
 				if (Configuration.Get.Image.Ext.Contains(ext))
 				{
-					ImageWorker worker = new ImageWorker();
-					mediaProcessingTasks.Add(worker.ProcessAsync(file, progress, Media.Type.Icon));
+					mediaProcessingTasks.Add(imageWorker.ProcessAsync(file, progress, Media.Type.Icon));
 				}
 				else if (Configuration.Get.Video.Ext.Contains(ext))
 				{
-					VideoWorker worker = new VideoWorker();
-					mediaProcessingTasks.Add(worker.ProcessAsync(file, progress, Media.Type.Icon));
+					mediaProcessingTasks.Add(videoWorker.ProcessAsync(file, progress, Media.Type.Icon));
 				}
 			}
 
@@ -135,13 +142,11 @@ namespace ImageGallery.Workers
 				String ext = file.Extension.ToLower().Trim('.');
 				if (Configuration.Get.Image.Ext.Contains(ext))
 				{
-					ImageWorker worker = new ImageWorker();
-					mediaProcessingTasks.Add(worker.ProcessAsync(file, progress, Media.Type.Thumb));
+					mediaProcessingTasks.Add(imageWorker.ProcessAsync(file, progress, Media.Type.Thumb));
 				}
 				else if (Configuration.Get.Video.Ext.Contains(ext))
 				{
-					VideoWorker worker = new VideoWorker();
-					mediaProcessingTasks.Add(worker.ProcessAsync(file, progress, Media.Type.Thumb));
+					mediaProcessingTasks.Add(videoWorker.ProcessAsync(file, progress, Media.Type.Thumb));
 				}
 			}
 
@@ -157,31 +162,25 @@ namespace ImageGallery.Workers
 
                     MediaResult mediaResult = task.Result;
 					string ext = mediaResult.File.Extension.ToLower().Trim('.');
-					string path = "";
-					string type = "";
-
 					if (mediaResult.Type == Media.Type.Thumb)
 					{
-						path = mediaResult.File.Name;
+						DirItem item = new DirItem { Title = mediaResult.Title, Updated = DateTime.Now };
 						if (Configuration.Get.Image.Ext.Contains(ext))
 						{
-							type = "image";
+							item.Type = "image";
+							item.Width = mediaResult.Width;
+							item.Height = mediaResult.Height;
 						}
 						else if (Configuration.Get.Video.Ext.Contains(ext))
 						{
-							type = "video";
+							item.Type = "video";
 						}
 						else
 						{
-							type = "unknown";
+							item.Type = "unknown";
 						}
 
-						mediaList.Add(path, new DirItem
-						{
-							Title = mediaResult.Title,
-							Type = type,
-							Updated = DateTime.Now
-						});
+						mediaList.Add(mediaResult.File.Name, item);
 					}
 
 					try
@@ -199,13 +198,13 @@ namespace ImageGallery.Workers
 					}
 					catch (IOException ioEx) when (IsDiskFull(ioEx))
 					{
-						Log.Error($"Disk full while writing metadata ADS for: {mediaResult.File.FullName} " +
-							$"(volume: {Path.GetPathRoot(mediaResult.File.FullName)})", ioEx);
+						logger.LogError(ioEx, "Disk full while writing metadata ADS for {Path} on volume {Volume}",
+							mediaResult.File.FullName, Path.GetPathRoot(mediaResult.File.FullName));
 					}
 					catch (IOException ioEx)
 					{
-						Log.Error($"I/O error writing metadata ADS for: {mediaResult.File.FullName} — " +
-							"verify the volume supports NTFS alternate data streams and the app has write permission", ioEx);
+						logger.LogError(ioEx, "I/O error writing metadata ADS for {Path}. Verify the volume supports " +
+							"NTFS alternate data streams and the app has write permission", mediaResult.File.FullName);
 					}
 				}
 			}
@@ -215,7 +214,7 @@ namespace ImageGallery.Workers
 				foreach (Exception inner in e.InnerExceptions)
 				{
 					progress.FinishedWork("Error");
-					Log.Error($"Worker failed while processing directory: {workDirectory.FullName}", inner);
+					logger.LogError(inner, "Worker failed while processing directory {Path}", workDirectory.FullName);
 				}
 			}
 
@@ -229,13 +228,13 @@ namespace ImageGallery.Workers
 				}
 				catch (IOException e) when (IsDiskFull(e))
                 {
-					Log.Error($"Disk full while writing directory index: {metaFilePath} " +
-						$"(volume: {Path.GetPathRoot(metaFilePath)})", e);
+					logger.LogError(e, "Disk full while writing directory index {Path} on volume {Volume}",
+						metaFilePath, Path.GetPathRoot(metaFilePath));
 				}
 				catch (IOException e)
                 {
-					Log.Error($"Failed to write directory index: {metaFilePath} — " +
-						"check that the app has write permission to the gallery directory", e);
+					logger.LogError(e, "Failed to write directory index {Path}. Check that the app " +
+						"has write permission to the gallery directory", metaFilePath);
 				}
 			}
 
@@ -291,6 +290,10 @@ namespace ImageGallery.Workers
 			public string Type { get; set; }
 			public string Title { get; set; }
 			public DateTime Updated { get; set; }
+			[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+			public int Width { get; set; }
+			[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+			public int Height { get; set; }
 		}
 
 		/// <summary>

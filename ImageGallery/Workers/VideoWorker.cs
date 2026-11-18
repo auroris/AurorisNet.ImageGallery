@@ -1,220 +1,163 @@
-using log4net;
+using Microsoft.Extensions.Logging;
 using System;
-using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Trinet.Core.IO.Ntfs;
-using Xabe.FFmpeg;
 
 namespace ImageGallery.Workers
 {
-	/// <summary>
-	/// Generates thumbnails and icons for video files using FFmpeg.
-	/// <list type="bullet">
-	///   <item><description>
-	///     <b>Thumbnail</b> — a short H.264 MP4 clip taken from the configured offset into the
-	///     video, scaled to the thumbnail dimensions, stored in the file's NTFS alternate data stream.
-	///     When producing a thumbnail the icon is also generated in the same pass to avoid a
-	///     second FFmpeg invocation.
-	///   </description></item>
-	///   <item><description>
-	///     <b>Icon</b> — a single PNG frame extracted from the first frame, scaled to icon dimensions,
-	///     stored in the file's NTFS alternate data stream.
-	///   </description></item>
-	/// </list>
-	/// Both derivatives are written to temporary files first, then copied into the ADS, so
-	/// the source file is never modified.
-	/// </summary>
-	public class VideoWorker
+	/// <summary>Generates a silent MP4 thumbnail and a PNG icon in the video's NTFS alternate data streams.</summary>
+	public class VideoWorker(ILogger<VideoWorker> logger)
 	{
-		private static readonly ILog Log = LogManager.GetLogger(typeof(VideoWorker));
-
-		public VideoWorker()
-		{}
-
-		/// <summary>
-		/// Processes a video file asynchronously, generating a thumbnail clip or an icon frame
-		/// depending on <paramref name="type"/>, and writing it to the file's NTFS alternate
-		/// data stream. When <paramref name="type"/> is <see cref="Media.Type.Thumb"/>, the icon
-		/// is also generated in the same pass. Also extracts IPTC metadata (title, caption).
-		/// </summary>
-		/// <param name="file">The video file to process.</param>
-		/// <param name="progress">Progress tracker for this directory's processing run.</param>
-		/// <param name="type">Whether to produce a thumbnail clip or an icon frame.</param>
-		/// <returns>A <see cref="MediaResult"/> populated with metadata and dimension information.</returns>
 		public async Task<MediaResult> ProcessAsync(FileInfo file, ProgressWorker progress, Media.Type type)
 		{
-			MediaResult result = new MediaResult();
-			IMediaInfo mediaInfo;
 			try
 			{
-				mediaInfo = await FFmpeg.GetMediaInfo(file.FullName);
+				var (width, height, duration) = await ProbeAsync(file);
+				var metadata = Media.GetMeta(file, logger);
+				var result = new MediaResult
+				{
+					File = file,
+					Updated = file.LastWriteTime,
+					Title = metadata.TryGetValue("Object Name", out var title) ? title : file.Name,
+					Caption = metadata.TryGetValue("Caption/Abstract", out var caption) ? caption : null,
+					Width = width,
+					Height = height,
+					Duration = duration,
+					Type = type
+				};
+
+				if (type == Media.Type.Thumb)
+				{
+					double start = Configuration.Get.Video.ClipStart;
+					double length = Configuration.Get.Video.ClipLength;
+					// If duration is unknown, start at the beginning and let FFmpeg stop at EOF.
+					if (start + length > duration)
+						start = 0;
+
+					// H.264 with yuv420p needs even dimensions. FFmpeg calculates the proportional height.
+					int thumbWidth = Math.Max(2, Configuration.Get.Image.Thumbnail.Width / 2 * 2);
+					await WriteDerivativeAsync(file, Media.GetThumbName(file),
+						"-ss", start.ToString(CultureInfo.InvariantCulture), "-i", file.FullName,
+						"-map", "0:V:0", "-t", length.ToString(CultureInfo.InvariantCulture),
+						"-an", "-vf", $"scale={thumbWidth}:-2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+						"-b:v", "60k", "-f", "mp4");
+				}
+
+				string iconName = Media.GetIconName(file);
+				if (!file.AlternateDataStreamExists(iconName))
+				{
+					// Use the tenth frame, or the last available frame on a shorter video.
+					string filter = $"trim=end_frame=10,scale={Configuration.Get.Image.Icon.Width}:-1,reverse";
+					await WriteDerivativeAsync(file, iconName, "-i", file.FullName, "-map", "0:V:0",
+						"-vf", filter, "-frames:v", "1", "-c:v", "png", "-f", "image2", "-update", "1");
+				}
+
+				progress.FinishedWork(file.FullName);
+				return result;
+			}
+			catch (IOException ex) when (ex.HResult == unchecked((int)0x80070070) || ex.HResult == unchecked((int)0x80070027))
+			{
+				logger.LogError(ex, "Disk full while processing video {Path} (temporary directory {TempDir})",
+					file.FullName, Configuration.Get.TempDir);
+				throw;
 			}
 			catch (Exception ex)
 			{
-				Log.Error($"FFmpeg failed to read media info for: {file.FullName}", ex);
+				logger.LogError(ex, "Failed to process video {Path} (temporary directory {TempDir})",
+					file.FullName, Configuration.Get.TempDir);
 				throw;
 			}
+		}
 
-			IVideoStream videoStream = mediaInfo.VideoStreams.FirstOrDefault();
-			if (videoStream == null)
+		private static async Task<(int Width, int Height, double Duration)> ProbeAsync(FileInfo file)
+		{
+			string json = await RunToolAsync("ffprobe", "-select_streams", "V:0",
+				"-show_entries", "stream=width,height,duration:format=duration", "-of", "json", "-i", file.FullName);
+			using var document = JsonDocument.Parse(json);
+			var root = document.RootElement;
+			var streams = root.GetProperty("streams");
+			if (streams.GetArrayLength() == 0)
+				throw new InvalidDataException($"No video stream found in {file.FullName}.");
+
+			var stream = streams[0];
+			int width = stream.GetProperty("width").GetInt32();
+			int height = stream.GetProperty("height").GetInt32();
+			if (width <= 0 || height <= 0)
+				throw new InvalidDataException($"Invalid video dimensions in {file.FullName}.");
+
+			double duration = ReadDuration(stream);
+			if (duration == 0 && root.TryGetProperty("format", out var format))
+				duration = ReadDuration(format);
+
+			return (width, height, duration);
+		}
+
+		private static double ReadDuration(JsonElement element)
+		{
+			if (element.TryGetProperty("duration", out var value)
+				&& double.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
+				&& double.IsFinite(duration) && duration > 0)
+				return duration;
+
+			return 0;
+		}
+
+		private static async Task WriteDerivativeAsync(FileInfo file, string streamName, params string[] arguments)
+		{
+			string tempPath = Path.Combine(Configuration.Get.TempDir, Guid.NewGuid().ToString("N"));
+			try
 			{
-				var ex = new InvalidOperationException("No video stream found in " + file.FullName);
-				Log.Error(ex.Message);
-				throw ex;
-			}
-
-			// Temp file is GUID-prefixed to avoid collisions when multiple workers run in parallel
-			string thumbTempFile = Path.Combine(Configuration.Get.TempDir, Guid.NewGuid() + "_" + Media.GetThumbName(file));
-
-			// Fill out metadata
-			Dictionary<string, string> metaDic = Media.GetMeta(file);
-			result.Title = metaDic.ContainsKey("Object Name") ? metaDic["Object Name"] : file.Name;
-			result.Caption = metaDic.ContainsKey("Caption/Abstract") ? metaDic["Caption/Abstract"] : result.Caption;
-			result.File = file;
-			result.Updated = file.LastWriteTime;
-			result.Width = videoStream.Width;
-			result.Height = videoStream.Height;
-			result.Duration = videoStream.Duration.TotalSeconds;
-			result.Type = type;
-
-			// Calculate the thumbnail clip start and length, clamping if the video is too short
-			double clipStart = Configuration.Get.Video.ClipStart;
-			double clipLength = Configuration.Get.Video.ClipLength;
-			double duration = videoStream.Duration.TotalSeconds;
-			if (clipStart + clipLength > duration)
-			{
-				clipStart = 0; // Requested clip exceeds video file's duration
-			}
-			if (clipStart + clipLength > duration)
-			{
-				clipLength = duration; // Extremely short video file
-			}
-
-			if (type == Media.Type.Thumb)
-			{
+				await RunToolAsync("ffmpeg", ["-nostdin", "-abort_on", "empty_output", .. arguments, tempPath]);
+				using var input = File.OpenRead(tempPath);
+				var stream = file.GetAlternateDataStream(streamName, FileMode.OpenOrCreate);
+				var output = stream.Open(FileMode.Create, FileAccess.Write, FileShare.None);
 				try
 				{
-					Media.Dimension d = Media.GetCroppedThumbnailDimensions(videoStream.Width, videoStream.Height, false);
-
-					IConversion thumbConversion = FFmpeg.Conversions.New()
-						.AddStream(videoStream)
-						.SetSeek(TimeSpan.FromSeconds(clipStart))
-						.SetOutputTime(TimeSpan.FromSeconds(clipLength))
-						.SetOutputFormat(Format.mp4)
-						.SetVideoBitrate(60000)
-						.AddParameter("-s " + ((int)d.Width).ToString() + "x" + ((int)d.Height).ToString())
-						.AddParameter("-vcodec libx264")
-						.AddParameter("-pix_fmt yuv420p")
-						.SetOutput(thumbTempFile);
-
-					await thumbConversion.Start();
-					using (FileStream input = File.OpenRead(thumbTempFile))
-					using (FileStream output = file.GetAlternateDataStream(Media.GetThumbName(file), FileMode.Create).OpenWrite())
+					using (output)
 					{
 						await input.CopyToAsync(output);
 					}
 				}
-				catch (IOException ex) when (IsDiskFull(ex))
+				catch
 				{
-					Log.Error($"Disk full while generating thumbnail for video: {file.FullName} " +
-						$"(temp dir: {Configuration.Get.TempDir}, target volume: {Path.GetPathRoot(file.FullName)})", ex);
+					stream.Delete();
 					throw;
 				}
-				catch (IOException ex)
-				{
-					Log.Error($"I/O error generating thumbnail for video: {file.FullName} " +
-						$"(temp file: {thumbTempFile}) — " +
-						"check temp dir write permissions and that the target volume supports NTFS alternate data streams", ex);
-					throw;
-				}
-				catch (Exception ex)
-				{
-					Log.Error($"Failed to generate thumbnail for video: {file.FullName} " +
-						$"(temp dir: {Configuration.Get.TempDir})", ex);
-					throw;
-				}
-				finally
-				{
-					if (File.Exists(thumbTempFile)) File.Delete(thumbTempFile);
-				}
-
-				// Generate the icon in the same pass; videoStream is no longer needed for the thumb
-				await GenerateIconAsync(file, videoStream);
-				progress.FinishedWork(file.FullName);
-			}
-			else if (type == Media.Type.Icon)
-			{
-				await GenerateIconAsync(file, videoStream);
-				progress.FinishedWork(file.FullName);
-			}
-
-			return result;
-		}
-
-		/// <summary>
-		/// Extracts a single PNG frame from <paramref name="videoStream"/> and writes it to the
-		/// icon alternate data stream on <paramref name="file"/>. Skipped if the icon ADS already
-		/// exists, so repeated calls for the same file are cheap.
-		/// </summary>
-		private async Task GenerateIconAsync(FileInfo file, IVideoStream videoStream)
-		{
-			if (file.AlternateDataStreamExists(Media.GetIconName(file))) { return; }
-
-			string iconTempFile = Path.Combine(Configuration.Get.TempDir, Guid.NewGuid() + "_" + Media.GetIconName(file));
-			Func<string, string> iconTempFileFunc = (number) => "\"" + iconTempFile.Replace("\\", "\\\\") + "\"";
-
-			try
-			{
-				videoStream.SetCodec(VideoCodec.png);
-				IConversion iconConversion = FFmpeg.Conversions.New()
-					.AddStream(videoStream)
-					.ExtractNthFrame(10, iconTempFileFunc)
-					.AddParameter("-s " + Configuration.Get.Image.Icon.Width.ToString() + "x" +
-						((int)(((double)Configuration.Get.Image.Icon.Width / (double)videoStream.Width) * (double)videoStream.Height)).ToString());
-
-				await iconConversion.Start();
-				using (FileStream input = File.OpenRead(iconTempFile))
-				using (FileStream output = file.GetAlternateDataStream(Media.GetIconName(file), FileMode.Create).OpenWrite())
-				{
-					await input.CopyToAsync(output);
-				}
-			}
-			catch (IOException ex) when (IsDiskFull(ex))
-			{
-				Log.Error($"Disk full while generating icon for video: {file.FullName} " +
-					$"(temp dir: {Configuration.Get.TempDir}, target volume: {Path.GetPathRoot(file.FullName)})", ex);
-				throw;
-			}
-			catch (IOException ex)
-			{
-				Log.Error($"I/O error generating icon for video: {file.FullName} " +
-					$"(temp file: {iconTempFile}) — " +
-					"check temp dir write permissions and that the target volume supports NTFS alternate data streams", ex);
-				throw;
-			}
-			catch (Exception ex)
-			{
-				Log.Error($"Failed to generate icon for video: {file.FullName} " +
-					$"(temp dir: {Configuration.Get.TempDir})", ex);
-				throw;
 			}
 			finally
 			{
-				if (File.Exists(iconTempFile)) File.Delete(iconTempFile);
+				File.Delete(tempPath);
 			}
 		}
 
-		/// <summary>
-		/// Returns true if the IOException represents a disk-full condition
-		/// (ERROR_DISK_FULL 0x70 or ERROR_HANDLE_DISK_FULL 0x27).
-		/// </summary>
-		private static bool IsDiskFull(IOException ex)
+		private static async Task<string> RunToolAsync(string tool, params string[] arguments)
 		{
-			const int ERROR_DISK_FULL = unchecked((int)0x80070070);
-			const int ERROR_HANDLE_DISK_FULL = unchecked((int)0x80070027);
-			return ex.HResult == ERROR_DISK_FULL || ex.HResult == ERROR_HANDLE_DISK_FULL;
+			var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "ffmpeg", tool + ".exe"))
+			{
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true
+			};
+			startInfo.ArgumentList.Add("-v");
+			startInfo.ArgumentList.Add("error");
+			foreach (string argument in arguments)
+				startInfo.ArgumentList.Add(argument);
+
+			using var process = Process.Start(startInfo);
+			var output = process.StandardOutput.ReadToEndAsync();
+			var errorOutput = process.StandardError.ReadToEndAsync();
+			await process.WaitForExitAsync();
+			string stdout = await output;
+			string stderr = await errorOutput;
+			if (process.ExitCode != 0)
+				throw new InvalidOperationException($"{tool} exited with code {process.ExitCode}: {stderr.Trim()}");
+
+			return stdout;
 		}
 	}
 }
