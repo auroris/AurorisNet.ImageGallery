@@ -16,16 +16,23 @@ updates:
         update-types:
           - "version-update:semver-major"
     groups:
-      # Magick.NET is the dependency the application follows: it reads and writes every image, and its releases carry
-      # ImageMagick's security fixes. It gets a pull request of its own, so each of its releases becomes a release here.
+      # Magick.NET is the first dependency the application follows: it reads and writes every image, and its releases
+      # carry ImageMagick's security fixes. It gets a pull request of its own, so each of its releases becomes a release
+      # here.
       magick:
         patterns:
           - "Magick.NET*"
+      # The FFmpeg tools come from auroris/AurorisNet.ImageGallery.FFmpeg, whose version is the FFmpeg release. Each
+      # of its releases also becomes a release here, once the video check in ci.yml has passed on it.
+      ffmpeg:
+        patterns:
+          - "AurorisNet.ImageGallery.FFmpeg"
       dependencies:
         patterns:
           - "*"
         exclude-patterns:
           - "Magick.NET*"
+          - "AurorisNet.ImageGallery.FFmpeg"
         update-types:
           - minor
           - patch

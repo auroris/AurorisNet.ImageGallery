@@ -23,7 +23,7 @@ env:
 
 jobs:
   test:
-    name: Build
+    name: Build and test
     # The application reads NTFS alternate data streams and bundles ffmpeg.exe, so it builds and runs on Windows only.
     runs-on: windows-latest
     timeout-minutes: 20

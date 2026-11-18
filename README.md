@@ -10,7 +10,7 @@ ImageGallery is an ASP.NET Core 10 application that serves a folder, or a networ
 
 - **Each file carries its own cache.** The thumbnail, the icon and the caption are named streams of the photo or video, such as `photo.jpg:thumbnail.jpg`. A file that is renamed or moved on NTFS keeps them, and a file that is deleted takes them with it. There is no database to keep in step with the folder.
 - **Thumbnails appear on the first visit.** Opening a folder in the gallery generates what its new files lack, and shows progress while it works. Later visits read the streams.
-- **Photos and videos.** A photo gets a cropped thumbnail and a small icon, made with ImageMagick. A video gets a short silent clip as its thumbnail and a still frame as its icon, made with FFmpeg.
+- **Photos and videos.** A photo gets a cropped thumbnail and a small icon, made with ImageMagick. A video gets a short silent clip as its thumbnail and a still frame as its icon, made with FFmpeg. A video that FFmpeg cannot decode still appears, as a link to the original file.
 - **Titles and captions from the files.** The gallery reads the IPTC **Object Name** as the title and **Caption/Abstract** as the caption, and uses the file name when a file has no title.
 
 ## Install
@@ -31,7 +31,7 @@ The settings are top-level keys of `appsettings.json`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `GalleryPath` | `DemoGallery` | The folder the gallery shows. A relative path starts at the application folder. A UNC path such as `\\server\share\Photos` works. |
+| `GalleryPath` | `DemoGallery` | The folder the gallery shows. A relative path starts at the application folder. A UNC path such as `\\server\share\Photos` works. When the folder does not exist, the gallery shows a `DemoGallery` folder beside the application if there is one. |
 | `TempDir` | `temp` | The working folder for ImageMagick and FFmpeg. A relative path starts at the application folder. The application creates it and stops at startup if it cannot write there. |
 | `Images` | `["jpg", "png"]` | The file extensions, without the dot, shown as photos. |
 | `Videos` | `["mp4"]` | The file extensions, without the dot, shown as videos. |
@@ -82,7 +82,7 @@ Swagger UI at `/swagger` lists the full API when the application runs in the Dev
 | `GET /api/media/thumb/{path}` | The file's thumbnail stream. |
 | `GET /api/media/icon/{path}` | The file's icon stream. |
 | `GET /api/media/meta/{path}` | The file's caption: `{ "Caption": "..." }`. |
-| `GET /api/media/file/{path}` | The file itself. |
+| `GET /api/media/file/{path}` | The file itself. The route answers range requests, which video players use to seek. |
 
 The thumbnail, icon and caption routes answer `404` for a file whose stream has not been written yet. The index is an object keyed by file name, or by the path of a subfolder's first media file:
 
@@ -133,10 +133,10 @@ After publishing, run `./tests/Test-VideoFallback.ps1 -PublishDirectory artifact
 
 ## Releases
 
-ImageGallery follows Magick.NET, which reads and writes every photo and carries ImageMagick's security fixes. Dependabot checks NuGet each day and gives Magick.NET a pull request of its own. `ci.yml` builds it, merges it and starts `release.yml`, which publishes `ImageGallery-<version>-win-x64.zip` and its `.sha256` on a GitHub release. Versions are `MAJOR.MINOR.PATCH`. The application ships no NuGet package.
+ImageGallery follows two packages: Magick.NET, which reads and writes every photo and carries ImageMagick's security fixes, and [AurorisNet.ImageGallery.FFmpeg](https://github.com/auroris/AurorisNet.ImageGallery.FFmpeg), which supplies the FFmpeg tools. Dependabot checks NuGet each day and gives each of the two a pull request of its own. `ci.yml` publishes the application, runs the video check, merges the pull request and starts `release.yml`, which publishes `ImageGallery-<version>-win-x64.zip` and its `.sha256` on a GitHub release. A new major version of either package, such as FFmpeg 10, stays open for a person to review. Versions are `MAJOR.MINOR.PATCH`. The application ships no NuGet package.
 
 No release exists yet: start the first by hand, by running `release.yml` with a version such as `1.0.0`. The [release guide](https://github.com/auroris/AurorisNet.Build/blob/main/docs/releasing.md) describes the workflows.
 
 ## License
 
-ImageGallery is under the [MIT license](LICENSE). The bundled FFmpeg executables are distributed under the GPL. The [third-party notices](THIRD-PARTY-NOTICES.md) list the licenses for the components in a release.
+ImageGallery is under the [MIT license](LICENSE). The bundled FFmpeg tools are distributed under the GPL, version 2 or later. The [third-party notices](THIRD-PARTY-NOTICES.md) list the licenses for the components in a release.
