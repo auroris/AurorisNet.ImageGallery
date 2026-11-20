@@ -1,7 +1,7 @@
 name: CI
 
 # Publishes and tests each pull request before merging Dependabot updates.
-# An update of a package the application references then starts the Release workflow.
+# An update of a package the application references ships in the next weekly release.
 on:
   pull_request:
   workflow_dispatch:
@@ -52,7 +52,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
     steps:
       - uses: auroris/AurorisNet.Build/actions/dependabot-release@main
         with:

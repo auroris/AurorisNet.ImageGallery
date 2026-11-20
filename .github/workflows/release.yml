@@ -2,8 +2,8 @@ name: Release
 
 run-name: Release ${{ inputs.version || format('(next {0})', inputs.bump) }}${{ inputs.dry-run && ' (dry run)' || '' }}
 
-# Publishes the application as a ZIP on a GitHub release. Starts by hand, or from the CI workflow when a Dependabot update
-# of a package the application references has built. The shared steps come from auroris/AurorisNet.Build, whose
+# Publishes the application as a ZIP on a GitHub release. Starts by hand, or from the Weekly release workflow when an update
+# of a package the application references has been merged. The shared steps come from auroris/AurorisNet.Build, whose
 # docs/releasing.md describes them. The application ships no NuGet package, so nothing goes to nuget.org.
 on:
   workflow_dispatch:
